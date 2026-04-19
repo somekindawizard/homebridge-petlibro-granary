@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Backoff } from '../util/backoff';
 
 describe('Backoff', () => {
@@ -60,7 +60,6 @@ describe('Backoff', () => {
       const b = new Backoff({ initialDelayMs: 100, factor: 1, jitter: 0.5, breakerThreshold: 100 });
       seen.add(b.recordFailure(0));
     }
-    // With jitter we expect a spread of values, not all 100.
     expect(seen.size).toBeGreaterThan(1);
     for (const v of seen) {
       expect(v).toBeGreaterThanOrEqual(50);
