@@ -1,6 +1,7 @@
 import { Logger } from 'homebridge';
 
 import { PetLibroAPI, RawDevice } from '../api';
+import { DeviceRawData } from '../types/petlibroApi';
 
 /**
  * Base class for all PETLIBRO devices.
@@ -15,28 +16,36 @@ import { PetLibroAPI, RawDevice } from '../api';
  */
 export abstract class Device {
   /** Merged raw data from /device/device/list plus later refresh calls. */
-  protected raw: Record<string, unknown>;
+  protected raw: DeviceRawData;
 
   constructor(
     data: RawDevice,
     protected readonly api: PetLibroAPI,
     protected readonly log: Logger,
   ) {
-    this.raw = { ...data } as Record<string, unknown>;
+    this.raw = { ...data } as DeviceRawData;
   }
 
   /** Merge new data into the device's internal state. */
   updateData(patch: Record<string, unknown>): void {
-    this.raw = { ...this.raw, ...patch };
+    this.raw = { ...this.raw, ...patch } as DeviceRawData;
+  }
+
+  /**
+   * Apply an *optimistic* local-only update for a nested settings field.
+   * Used by mutators (set child lock, set indicator light, ...) to flip
+   * the local state immediately without waiting for the next poll. The
+   * subsequent server poll will overwrite this if it disagrees.
+   */
+  patchNested(outer: keyof DeviceRawData, patch: Record<string, unknown>): void {
+    const current = this.nested(String(outer));
+    this.updateData({ [outer]: { ...current, ...patch } });
   }
 
   /**
    * Like `refresh()`, but returns a boolean indicating whether *any* of the
    * core fields were successfully populated. Used by the platform to decide
    * whether the accessory has real state on first registration.
-   *
-   * Subclasses can override this if they want different "ready" criteria;
-   * the default is "we saw a non-empty realInfo blob."
    */
   async refreshSafely(): Promise<boolean> {
     await this.refresh();
@@ -47,27 +56,57 @@ export abstract class Device {
   /**
    * Refresh base/real/attribute data. Subclasses should override and call
    * `super.refresh()` first to populate the common fields.
+   *
+   * Uses Promise.allSettled so a single failing endpoint doesn't lose all
+   * other state. The cached() layer in the API will keep stale data alive
+   * for 10s, but anything older falls through to the network.
    */
   async refresh(): Promise<void> {
-    try {
-      const [base, real, attrs, pets] = await Promise.all([
-        this.api.deviceBaseInfo(this.serial),
-        this.api.deviceRealInfo(this.serial),
-        this.api.deviceAttributeSettings(this.serial),
-        this.api.deviceGetBoundPets(this.serial),
-      ]);
-      // `base` fields are top-level on `this.raw` (they extend the original
-      // device-list entry). `realInfo` and `getAttributeSetting` are kept as
-      // nested sub-objects so the `nestedGet('realInfo', …)` accessors below
-      // can find them structurally, matching the upstream Python shape.
-      this.updateData({
-        ...base,
-        realInfo: real ?? {},
-        getAttributeSetting: attrs ?? {},
-        boundPets: pets,
-      });
-    } catch (err) {
-      this.logRefreshError(err);
+    const results = await Promise.allSettled([
+      this.api.deviceBaseInfo(this.serial),
+      this.api.deviceRealInfo(this.serial),
+      this.api.deviceAttributeSettings(this.serial),
+      this.api.deviceGetBoundPets(this.serial),
+    ]);
+    const labels = ['baseInfo', 'realInfo', 'attributeSettings', 'boundPets'];
+
+    const patch: Record<string, unknown> = {};
+    let anyFailed = false;
+    let anyError: unknown = null;
+
+    if (results[0].status === 'fulfilled') {
+      Object.assign(patch, results[0].value);
+    } else {
+      anyFailed = true;
+      anyError = results[0].reason;
+      this.log.debug(`Refresh: ${labels[0]} failed for ${this.name}:`, results[0].reason);
+    }
+    if (results[1].status === 'fulfilled') {
+      patch.realInfo = results[1].value ?? {};
+    } else {
+      anyFailed = true;
+      anyError ??= results[1].reason;
+      this.log.debug(`Refresh: ${labels[1]} failed for ${this.name}:`, results[1].reason);
+    }
+    if (results[2].status === 'fulfilled') {
+      patch.getAttributeSetting = results[2].value ?? {};
+    } else {
+      anyFailed = true;
+      anyError ??= results[2].reason;
+      this.log.debug(`Refresh: ${labels[2]} failed for ${this.name}:`, results[2].reason);
+    }
+    if (results[3].status === 'fulfilled') {
+      patch.boundPets = results[3].value;
+    } else {
+      anyFailed = true;
+      anyError ??= results[3].reason;
+      this.log.debug(`Refresh: ${labels[3]} failed for ${this.name}:`, results[3].reason);
+    }
+
+    this.updateData(patch);
+
+    if (anyFailed) {
+      this.logRefreshError(anyError);
     }
   }
 
@@ -75,9 +114,6 @@ export abstract class Device {
    * Log a refresh error with appropriate severity. Transient network
    * issues (timeouts, connection drops) get a one-line warning; genuinely
    * unexpected errors get the full stack trace at error level.
-   *
-   * This avoids the situation where a single axios timeout dumps a ~100-line
-   * stack trace into the user's Homebridge log every poll interval.
    */
   protected logRefreshError(err: unknown): void {
     const transientCodes = new Set([
@@ -131,7 +167,7 @@ export abstract class Device {
     return String(this.raw.hardwareVersion ?? '0.0.0');
   }
 
-  /** Whether this account owns (vs is shared) the device. Matches HA logic. */
+  /** Whether this account owns (vs is shared) the device. */
   get owned(): boolean {
     const state = this.raw.deviceShareState;
     // 1 = Shared with me; 2 = Owned, shared; 3 = Owned, not shared.
