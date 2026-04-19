@@ -41,7 +41,7 @@
         "default": 60,
         "minimum": 30,
         "maximum": 600,
-        "description": "Fast-tier polling cadence for live state (food level, online, etc.). Slow-tier endpoints (feeding plan, OTA, attribute settings) refresh every 5 minutes regardless. After any user action, polling temporarily speeds up to 15s for 2 minutes."
+        "description": "Fast-tier polling cadence for live state. Slow-tier endpoints refresh every 5 minutes regardless. After any user action, polling temporarily speeds up to 15s for 2 minutes."
       },
       "manualFeedPortions": {
         "title": "Manual Feed Portions",
@@ -57,7 +57,74 @@
         "default": 30,
         "minimum": 7,
         "maximum": 180,
-        "description": "How many days a fresh desiccant pack lasts. Used to compute the FilterLifeLevel percentage shown in the Eve app and similar."
+        "description": "How many days a fresh desiccant pack lasts. Drives the Filter Life % shown in the Eve app."
+      },
+      "ui": {
+        "title": "HomeKit Service Visibility",
+        "type": "object",
+        "description": "Choose which services appear in Home.app. Disabling a service removes it from the accessory entirely (and any automations using it will stop working).",
+        "properties": {
+          "useEmojiNames": {
+            "title": "Use emoji in default service names",
+            "type": "boolean",
+            "default": true,
+            "description": "Prepends an emoji to each service name (🍽️ Feed Now, 💡 Indicator, 🔒 Child Lock, etc.) for easier scanning in Home.app. Services you've already renamed are unaffected."
+          },
+          "exposeFeedNow": {
+            "title": "Show Feed Now switch",
+            "type": "boolean",
+            "default": true
+          },
+          "exposeFeedingSchedule": {
+            "title": "Show Feeding Schedule switch",
+            "type": "boolean",
+            "default": true
+          },
+          "exposeIndicator": {
+            "title": "Show Indicator Light",
+            "type": "boolean",
+            "default": true,
+            "description": "Renders as a Lightbulb in Home.app (was a Switch in 0.4.x and earlier)."
+          },
+          "exposeChildLock": {
+            "title": "Show Child Lock",
+            "type": "boolean",
+            "default": true,
+            "description": "Renders as a Lock in Home.app (was a Switch in 0.4.x and earlier). Supports Siri lock/unlock verbs."
+          },
+          "exposeResetDesiccant": {
+            "title": "Show Reset Desiccant switch",
+            "type": "boolean",
+            "default": false,
+            "description": "Off by default. Most users reset the desiccant counter manually on the device once a month — no need for a dedicated tile."
+          },
+          "exposeRecentFeed": {
+            "title": "Show Recent Feed sensor",
+            "type": "boolean",
+            "default": true,
+            "description": "Contact sensor that briefly opens after each successful feed; useful as an automation trigger."
+          },
+          "exposeDispenser": {
+            "title": "Show Dispenser Jam sensor",
+            "type": "boolean",
+            "default": true
+          },
+          "exposeDesiccant": {
+            "title": "Show Desiccant Filter Life",
+            "type": "boolean",
+            "default": true
+          },
+          "exposeFoodLow": {
+            "title": "Show Food Low sensor",
+            "type": "boolean",
+            "default": true
+          },
+          "exposeBattery": {
+            "title": "Show Battery",
+            "type": "boolean",
+            "default": true
+          }
+        }
       },
       "debug": {
         "title": "Debug Logging",
@@ -66,5 +133,37 @@
         "description": "Enable verbose debug logs. Useful when reporting issues."
       }
     }
-  }
+  },
+  "layout": [
+    "name",
+    "email",
+    "password",
+    "region",
+    {
+      "type": "fieldset",
+      "title": "Behavior",
+      "expandable": true,
+      "expanded": false,
+      "items": ["pollIntervalSeconds", "manualFeedPortions", "desiccantCycleDays", "debug"]
+    },
+    {
+      "type": "fieldset",
+      "title": "HomeKit Services",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "ui.useEmojiNames",
+        "ui.exposeFeedNow",
+        "ui.exposeFeedingSchedule",
+        "ui.exposeIndicator",
+        "ui.exposeChildLock",
+        "ui.exposeResetDesiccant",
+        "ui.exposeRecentFeed",
+        "ui.exposeDispenser",
+        "ui.exposeDesiccant",
+        "ui.exposeFoodLow",
+        "ui.exposeBattery"
+      ]
+    }
+  ]
 }
