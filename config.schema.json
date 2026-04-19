@@ -3,7 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "headerDisplay": "Homebridge plugin for PETLIBRO smart pet devices.\n\nBefore setup, review the [Account Management](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Account-Management) and [Password Limitations](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Password-Limitation) wiki pages — only one session can be logged in at a time, so consider creating a dedicated PETLIBRO account for Homebridge and sharing your devices to it.",
-  "footerDisplay": "For support, see the [GitHub issues](https://github.com/bwarren89/homebridge-petlibro-granary/issues).",
+  "footerDisplay": "For support, see the [GitHub issues](https://github.com/somekindawizard/homebridge-petlibro-granary/issues).",
   "schema": {
     "type": "object",
     "properties": {

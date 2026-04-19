@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4 — 2026-04-19
+
+### Fixed
+- **Critical data correctness bug: all sensor readings were stuck at defaults.** The base `Device.refresh()` method was spreading `realInfo` and `getAttributeSetting` response fields directly into the top level of the device's data object, rather than keeping them as nested sub-objects. The property getters (`foodLow`, `online`, `batteryPercent`, `indicatorLightOn`, `childLockOn`, `inSleepMode`, etc.) all use `nestedGet('realInfo', …)` to read those fields — so they were looking for a nested `realInfo` object that never existed and silently falling back to their default values (`false`, `0`, etc.).
+  
+  Symptoms: Home app showing battery as 0% regardless of actual state, Food Low never triggering, Indicator and Child Lock switches never reflecting the real device state. Controls (Feed Now, Reset Desiccant) were unaffected since they only POST data, they don't read it.
+  
+  Also caused `refreshSafely()` to always return false on first run (it checks for a non-empty `realInfo` object that didn't exist), producing a spurious "Initial refresh failed" warning on every restart since v0.3.0.
+  
+  This bug was introduced in v0.3.0 as part of a refresh-dedup optimization that was well-intentioned but broke the nesting contract that the property getters relied on. Both the base `Device.refresh()` and `GranarySmartFeeder.refresh()` now correctly preserve the nested structure.
+
 ## 0.3.3 — 2026-04-19
 
 ### Fixed

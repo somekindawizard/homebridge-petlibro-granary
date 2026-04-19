@@ -1,16 +1,19 @@
 {
   "displayName": "Homebridge PETLIBRO Granary",
   "name": "homebridge-petlibro-granary",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Homebridge plugin for the PETLIBRO Granary Smart Feeder (PLAF103) and Granary Smart Camera Feeder (PLAF203). Ported from the jjjonesjr33/petlibro Home Assistant integration.",
   "license": "GPL-3.0-or-later",
-  "author": "bwarren89",
+  "author": {
+    "name": "Brandon Warren",
+    "url": "https://github.com/somekindawizard"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bwarren89/homebridge-petlibro-granary.git"
+    "url": "git+https://github.com/somekindawizard/homebridge-petlibro-granary.git"
   },
   "bugs": {
-    "url": "https://github.com/bwarren89/homebridge-petlibro-granary/issues"
+    "url": "https://github.com/somekindawizard/homebridge-petlibro-granary/issues"
   },
   "engines": {
     "node": "^18.17.0 || ^20.9.0 || ^22 || ^24",

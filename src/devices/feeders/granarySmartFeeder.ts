@@ -22,10 +22,15 @@ export class GranarySmartFeeder extends Device {
     await super.refresh();
 
     try {
-      // realInfo and getAttributeSetting are already fetched by Device.refresh().
-      // Thanks to the 10s response cache in the API client, we *could* safely
-      // re-fetch them here, but it's cleaner to only grab the extras.
-      const [grainStatus, upgrade, workRecord, feedingToday] = await Promise.all([
+      // realInfo and getAttributeSetting need to be re-fetched here so they
+      // appear as *nested* sub-objects on this.raw rather than being flattened
+      // into the top level by the base class's spread-merge. The property
+      // getters below all use nestedGet('realInfo', …) — they need the
+      // nested structure to survive. The 10s API response cache makes the
+      // re-fetch a no-op in practice, so there's no network cost.
+      const [realInfo, attrSettings, grainStatus, upgrade, workRecord, feedingToday] = await Promise.all([
+        this.api.deviceRealInfo(this.serial),
+        this.api.deviceAttributeSettings(this.serial),
         this.api.deviceGrainStatus(this.serial),
         this.api.deviceUpgrade(this.serial),
         this.api.deviceWorkRecord(this.serial),
@@ -37,6 +42,8 @@ export class GranarySmartFeeder extends Device {
         : [];
 
       this.updateData({
+        realInfo: realInfo ?? {},
+        getAttributeSetting: attrSettings ?? {},
         grainStatus: grainStatus ?? {},
         getUpgrade: upgrade ?? {},
         // Upstream key is lowercase "getfeedingplantoday" — matching that

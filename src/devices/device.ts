@@ -56,10 +56,14 @@ export abstract class Device {
         this.api.deviceAttributeSettings(this.serial),
         this.api.deviceGetBoundPets(this.serial),
       ]);
+      // `base` fields are top-level on `this.raw` (they extend the original
+      // device-list entry). `realInfo` and `getAttributeSetting` are kept as
+      // nested sub-objects so the `nestedGet('realInfo', …)` accessors below
+      // can find them structurally, matching the upstream Python shape.
       this.updateData({
         ...base,
-        ...real,
-        ...attrs,
+        realInfo: real ?? {},
+        getAttributeSetting: attrs ?? {},
         boundPets: pets,
       });
     } catch (err) {
