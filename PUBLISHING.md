@@ -1,144 +1,116 @@
-# 🚀 Publishing `homebridge-petlibro-granary` v0.4.0
+# Publishing `homebridge-petlibro-granary` v0.4.0
 
-A complete, no-context-needed walkthrough for publishing the next version from your **Mac mini at home** (which already has an older clone of this repo).
+A complete, no-context-needed walkthrough for publishing from your
+**Mac mini at home** (`~/homebridge-petlibro-granary`).
 
 ---
 
 ## What you have at home
 
-- ✅ Old clone of `homebridge-petlibro-granary` (somewhere like `~/Developer/` or `~/Code/`)
-- ✅ Old built `dist/` folder and `.tgz` from your last release
-- ✅ npm + git already installed and authenticated
+- Local clone at `~/homebridge-petlibro-granary`
+- npm + git already installed and authenticated
 
 ## What you need to do
 
-1. Merge PR #1 on GitHub
-2. Pull the latest code to your local clone
-3. Build + test
-4. Publish new version to npm AND push tag to GitHub
+1. Fix the stale lockfile on the PR branch so CI passes
+2. Wait for CI to go green
+3. Merge PR #1 into `main` on GitHub
+4. Pull `main`, build, tag, publish to npm
 
 ---
 
-## Step 0 — Find your local clone
+## Step 1 — Fix the lockfile and get CI green
+
+The `package-lock.json` on the branch is still at v0.3.3 and missing the new
+devDependencies (vitest, etc.). CI runs `npm ci`, which requires the lockfile
+to match `package.json` exactly, so it fails immediately.
 
 ```bash
-# If you don't remember where it is:
-mdfind -name "homebridge-petlibro-granary" -onlyin ~
-
-# Or just search common dev folders:
-ls ~/Developer ~/Code ~/Projects ~/Documents 2>/dev/null | grep -i petlibro
+cd ~/homebridge-petlibro-granary
+git fetch origin
+git checkout feature/reliability-and-polish
+rm -rf node_modules package-lock.json
+npm install
+npm run lint
+npm test
+npm run build
+git add package-lock.json
+git commit -m "fix: regenerate package-lock.json for 0.4.0 dependencies"
+git push
 ```
 
-Once you find it, `cd` into it:
-
-```bash
-cd ~/path/to/homebridge-petlibro-granary
-```
-
-**Verify it's the right repo and remote is set:**
-
-```bash
-git remote -v
-# Should print:
-# origin  https://github.com/somekindawizard/homebridge-petlibro-granary.git (fetch)
-# origin  https://github.com/somekindawizard/homebridge-petlibro-granary.git (push)
-```
-
-If `origin` is set, you're good — git remembers everything from your original clone. No re-cloning needed, no matter how out of date the local copy is.
+After the push, go check the PR. CI should re-run and pass on all three
+Node versions (20, 22, 24). **Do not continue until all checks are green.**
 
 ---
 
-## Step 1 — Merge the PR on GitHub
+## Step 2 — Merge the PR on GitHub
 
-Open the PR and click **"Squash and merge"**:
+Once CI is green, open the PR and click **"Squash and merge"**:
 
-👉 https://github.com/somekindawizard/homebridge-petlibro-granary/pull/1
+https://github.com/somekindawizard/homebridge-petlibro-granary/pull/1
 
-(Or if you have the `gh` CLI: `gh pr merge 1 --squash --delete-branch`)
+(Or with the `gh` CLI: `gh pr merge 1 --squash --delete-branch`)
 
 This puts all the new code on the `main` branch.
 
 ---
 
-## Step 2 — Pull the latest code to your Mac mini
+## Step 3 — Pull main and verify locally
 
 ```bash
-cd ~/path/to/homebridge-petlibro-granary
-
-# Make sure you're on main
+cd ~/homebridge-petlibro-granary
 git checkout main
-
-# Pull the merged PR
 git pull
-```
-
-You'll see output like:
-```
-Updating abc1234..def5678
-Fast-forward
- 24 files changed, 1616 insertions(+), 438 deletions(-)
-```
-
-That confirms the new 0.4.0 code is now on your machine.
-
----
-
-## Step 3 — Clean install + build + test
-
-The PR added new dev dependencies (vitest, eslint plugins, etc.), so a fresh install is safest:
-
-```bash
-# Wipe old node_modules and old built tarball
 rm -rf node_modules dist *.tgz
-
-# Fresh install
 npm install
-
-# Run the new test suite
 npm test
-
-# Lint
 npm run lint
-
-# Build the dist/ folder
 npm run build
 ```
 
 If all four pass, you're ready to publish.
 
-**Optional sanity check** — see exactly what files will end up in the npm tarball:
+**Optional sanity check** — see exactly what files will end up in the npm
+tarball:
 
 ```bash
 npm pack --dry-run
 ```
 
-You should see only: `dist/`, `config.schema.json`, `LICENSE`, `README.md`, `CHANGELOG.md`, `package.json`. **Not** `src/`, `node_modules/`, `.git/`, or test files.
+You should see only: `dist/`, `config.schema.json`, `LICENSE`, `README.md`,
+`CHANGELOG.md`, `package.json`. **Not** `src/`, `node_modules/`, `.git/`,
+or test files.
 
 ---
 
-## Step 4 — Bump version, tag, push, publish
+## Step 4 — Tag and publish
+
+`package.json` already says `0.4.0` from the PR, so you just need the git
+tag and the npm publish:
 
 ```bash
-# Bumps package.json to 0.4.0 AND creates git tag v0.4.0 AND commits both
-npm version 0.4.0
-
-# Push the version-bump commit + the new tag to GitHub
+git tag v0.4.0
 git push --follow-tags
-
-# Publish to npm (this is what Homebridge users actually install)
 npm publish
 ```
 
-If npm asks for a 2FA code:
+If `npm publish` asks for a 2FA code:
+
 ```bash
 npm publish --otp=123456    # use your current Authenticator code
 ```
+
+> **Note:** If `git tag v0.4.0` says the tag already exists, that means
+> you (or a previous attempt) already created it. Check with `git tag -l`
+> and if the tag is pointing at the right commit, just skip to
+> `git push --follow-tags` and `npm publish`.
 
 ---
 
 ## Step 5 — Verify it worked
 
-Wait ~30 seconds, then:
+Wait about 30 seconds, then:
 
 ```bash
 npm view homebridge-petlibro-granary version
@@ -147,9 +119,10 @@ npm view homebridge-petlibro-granary version
 
 Or check in a browser:
 - npm: https://www.npmjs.com/package/homebridge-petlibro-granary
-- GitHub releases: https://github.com/somekindawizard/homebridge-petlibro-granary/releases (you'll see tag v0.4.0)
+- GitHub: https://github.com/somekindawizard/homebridge-petlibro-granary/releases (you'll see tag v0.4.0)
 
-**Your Homebridge users will see "Update available: 0.4.0" within ~1 hour automatically.** Nothing else for you to do.
+**Homebridge users will see "Update available: 0.4.0" within about an hour
+automatically.** Nothing else for you to do.
 
 ---
 
@@ -157,14 +130,16 @@ Or check in a browser:
 
 | Step | What it changes |
 |---|---|
+| `git fetch origin` | Downloads remote branch refs without changing local files |
+| Fix lockfile + push | CI can now install dependencies and run checks |
 | Merge PR on GitHub | Code on GitHub `main` is updated |
-| `git pull` | Your Mac mini gets the latest source |
+| `git checkout main && git pull` | Your Mac mini gets the latest source |
 | `npm install` | Downloads new dev dependencies |
-| `npm test` | Runs ~50 tests covering the new code |
-| `npm run build` | Compiles TypeScript → JavaScript in `dist/` |
-| `npm version 0.4.0` | Bumps version, makes git tag, commits |
-| `git push --follow-tags` | GitHub now shows v0.4.0 tag + bump commit |
-| `npm publish` | **Tarball uploaded to npmjs.com — users can install** |
+| `npm test` | Runs the test suite covering the new code |
+| `npm run build` | Compiles TypeScript to JavaScript in `dist/` |
+| `git tag v0.4.0` | Creates the version tag (package.json already says 0.4.0) |
+| `git push --follow-tags` | GitHub now shows v0.4.0 tag |
+| `npm publish` | **Tarball uploaded to npmjs.com, users can install** |
 
 ---
 
@@ -173,7 +148,8 @@ Or check in a browser:
 > **GitHub** = the factory (source code, issues, PRs, history)
 > **npm** = the store shelf (where Homebridge installs from)
 >
-> Pushing to GitHub alone does NOT update Homebridge users. You MUST run `npm publish` for users to get the new version.
+> Pushing to GitHub alone does NOT update Homebridge users. You MUST run
+> `npm publish` for users to get the new version.
 
 ---
 
@@ -181,24 +157,41 @@ Or check in a browser:
 
 | Problem | Fix |
 |---|---|
-| `git pull` says "you have local changes" | `git stash` first, then `git pull`, then `git stash pop` |
-| `git pull` says "merge conflict" | Your old clone has changes you forgot. `git status` to see what. If safe to discard: `git reset --hard origin/main` |
-| `npm install` errors about Node version | You need Node 20+. Check with `node -v`. If old, install via `brew upgrade node` or from nodejs.org |
-| `npm test` fails | **Stop.** Don't publish broken code. Open the PR or file an issue. |
-| `npm publish` says "version exists" | You skipped `npm version`. Run it, then republish. |
+| `git checkout` says "you have local changes" | `git stash` first, then checkout, then `git stash pop` |
+| `git pull` says "merge conflict" | Your old clone has local changes. `git status` to see what. If safe to discard: `git reset --hard origin/main` |
+| `npm install` errors about Node version | You need Node 20+. Check with `node -v`. If old: `brew upgrade node` or download from nodejs.org |
+| `npm test` fails | **Stop.** Don't publish broken code. Debug locally or open an issue. |
+| `npm publish` says "version exists" | You already published 0.4.0. If you need to fix something, bump to 0.4.1. |
 | `npm publish` says "you do not have permission" | Run `npm login` first |
 | `npm publish` asks for OTP | `npm publish --otp=YOUR_6_DIGIT_CODE` |
 | Pushed wrong version by accident | `npm unpublish homebridge-petlibro-granary@0.4.0` (only works within 72hr) |
 | `git push` asks for username/password | Username = your GitHub username. Password = your **PAT**, not your GitHub password |
+| `git tag v0.4.0` says "already exists" | Check `git log v0.4.0` to see if it's on the right commit. If so, skip to `git push --follow-tags`. |
 
 ---
 
-## TL;DR — the whole thing in one block
+## TL;DR
 
-After merging PR #1 on GitHub:
+### Fix CI (do this first):
 
 ```bash
-cd ~/path/to/homebridge-petlibro-granary
+cd ~/homebridge-petlibro-granary
+git fetch origin
+git checkout feature/reliability-and-polish
+rm -rf node_modules package-lock.json
+npm install
+npm run lint
+npm test
+npm run build
+git add package-lock.json
+git commit -m "fix: regenerate package-lock.json for 0.4.0 dependencies"
+git push
+```
+
+### After CI is green, merge the PR on GitHub, then publish:
+
+```bash
+cd ~/homebridge-petlibro-granary
 git checkout main
 git pull
 rm -rf node_modules dist *.tgz
@@ -206,7 +199,7 @@ npm install
 npm test
 npm run lint
 npm run build
-npm version 0.4.0
+git tag v0.4.0
 git push --follow-tags
 npm publish
 ```
