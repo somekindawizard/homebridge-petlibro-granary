@@ -5,11 +5,15 @@ import { Logger } from 'homebridge';
 import {
   API_CODE_NOT_LOGGED_IN,
   API_CODE_SUCCESS,
+  API_CODES_BAD_CREDENTIALS,
   API_URLS,
   PETLIBRO_APPID,
   PETLIBRO_APPSN,
+  PetLibroRegion,
   RESPONSE_CACHE_TTL_MS,
 } from './settings';
+import { Backoff } from './util/backoff';
+import { sleep } from './util/jitter';
 
 /**
  * Raw device entry as returned by /device/device/list.
@@ -49,28 +53,50 @@ export class PetLibroAPIError extends Error {
   }
 }
 
+/** Thrown when the API rejected our credentials and re-login is futile. */
+export class PetLibroAuthFatalError extends PetLibroAPIError {
+  constructor(message: string, code?: number) {
+    super(message, code);
+    this.name = 'PetLibroAuthFatalError';
+  }
+}
+
 /**
  * PETLIBRO API client.
  *
  * Faithful port of custom_components/petlibro/api.py from the
- * jjjonesjr33/petlibro Home Assistant integration. Key behaviours preserved:
+ * jjjonesjr33/petlibro Home Assistant integration. Behaviours preserved:
  *
  *   - MD5 password hashing on login
- *   - Token persistence via the onTokenChange callback (so Homebridge can
- *     save it to accessory storage between restarts)
- *   - Auto re-login on API code 1009 (NOT_YET_LOGIN) with a single retry
+ *   - Token persistence via the onTokenChange callback
+ *   - Auto re-login on API code 1009 (NOT_YET_LOGIN), with exponential
+ *     backoff and a circuit breaker that trips after 6 consecutive auth
+ *     failures so a wrong password doesn't infinite-loop
+ *   - Distinguishes "session expired" (retry) from "wrong credentials"
+ *     (give up, do not retry until process restart)
  *   - Per-endpoint response cache with 10s TTL to dedup rapid-fire calls
  *   - Fresh UUID-derived requestId for mutation endpoints that require it
  */
 export class PetLibroAPI {
   private readonly http: AxiosInstance;
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly loginBackoff = new Backoff({
+    initialDelayMs: 5_000,
+    maxDelayMs: 5 * 60_000,
+    factor: 2,
+    jitter: 0.2,
+    breakerThreshold: 6,
+  });
   private token: string | null;
+  /** Set permanently true when bad credentials are detected. */
+  private credentialsRejected = false;
+  /** Promise dedup for in-flight logins so concurrent requests don't double-login. */
+  private loginInFlight: Promise<string> | null = null;
 
   constructor(
     private readonly email: string,
     private readonly password: string,
-    private readonly region: 'US',
+    private readonly region: PetLibroRegion,
     private readonly timezone: string,
     private readonly log: Logger,
     initialToken: string | null = null,
@@ -105,10 +131,41 @@ export class PetLibroAPI {
   }
 
   /**
-   * Log in and retrieve a session token. Called automatically on construction
-   * if no initial token is supplied, and by the request loop on 1009 errors.
+   * Log in and retrieve a session token. Concurrent callers share a single
+   * in-flight login promise. Throws PetLibroAuthFatalError on bad credentials.
    */
   async login(): Promise<string> {
+    if (this.credentialsRejected) {
+      throw new PetLibroAuthFatalError(
+        'Refusing to retry login: credentials previously rejected. ' +
+        'Fix the email/password in config.json and restart Homebridge.',
+      );
+    }
+
+    if (this.loginInFlight) {
+      return this.loginInFlight;
+    }
+
+    this.loginInFlight = this.doLogin().finally(() => {
+      this.loginInFlight = null;
+    });
+    return this.loginInFlight;
+  }
+
+  private async doLogin(): Promise<string> {
+    // Honor backoff window — if a previous failure asked us to wait, wait.
+    const wait = this.loginBackoff.msUntilNextAttempt();
+    if (this.loginBackoff.isTripped()) {
+      throw new PetLibroAuthFatalError(
+        `Login circuit breaker tripped after ${this.loginBackoff.failureCount()} ` +
+        'consecutive failures. Restart Homebridge after fixing credentials.',
+      );
+    }
+    if (wait > 0) {
+      this.log.debug(`Login backoff: waiting ${wait}ms before next attempt.`);
+      await sleep(wait);
+    }
+
     this.log.debug(`Logging in as ${this.email}`);
 
     const body = {
@@ -124,20 +181,50 @@ export class PetLibroAPI {
       type: null,
     };
 
-    const resp = await this.http.post<ApiEnvelope<{ token?: string }>>(
-      '/member/auth/login',
-      body,
-    );
+    let resp;
+    try {
+      resp = await this.http.post<ApiEnvelope<{ token?: string }>>(
+        '/member/auth/login',
+        body,
+      );
+    } catch (err) {
+      const delay = this.loginBackoff.recordFailure();
+      this.log.warn(
+        `Login HTTP error; backing off ${Math.round(delay / 1000)}s ` +
+        `(attempt ${this.loginBackoff.failureCount()}).`,
+      );
+      throw err;
+    }
 
     const data = resp.data;
     if (!data || data.code !== API_CODE_SUCCESS || !data.data?.token) {
+      const code = data?.code;
+      const msg = data?.msg ?? 'unknown';
+
+      if (code !== undefined && API_CODES_BAD_CREDENTIALS.has(code)) {
+        this.credentialsRejected = true;
+        this.log.error(
+          `PETLIBRO rejected credentials (code=${code} msg=${msg}). ` +
+          'Will not retry until Homebridge is restarted.',
+        );
+        throw new PetLibroAuthFatalError(
+          `Login rejected: code=${code} msg=${msg}`,
+          code,
+        );
+      }
+
+      const delay = this.loginBackoff.recordFailure();
+      this.log.warn(
+        `Login failed (code=${code} msg=${msg}); backing off ${Math.round(delay / 1000)}s.`,
+      );
       throw new PetLibroAPIError(
-        `Login failed: code=${data?.code} msg=${data?.msg ?? 'unknown'}`,
-        data?.code,
+        `Login failed: code=${code} msg=${msg}`,
+        code,
       );
     }
 
     this.token = data.data.token;
+    this.loginBackoff.reset();
     this.onTokenChange(this.token);
     this.log.debug('Login successful, token cached.');
     return this.token;
@@ -146,11 +233,22 @@ export class PetLibroAPI {
   async logout(): Promise<void> {
     if (!this.token) return;
     try {
-      await this.request('/member/auth/logout');
+      // Bypass `request()`'s auto-relogin behavior — if the token is
+      // already invalid we don't want to log back in just to log out.
+      await this.http.post(
+        '/member/auth/logout',
+        {},
+        { headers: { token: this.token } },
+      );
     } catch (err) {
       this.log.debug('Logout request failed (continuing):', err);
     }
     this.token = null;
+  }
+
+  /** Whether further login attempts are pointless. */
+  isCredentialsRejected(): boolean {
+    return this.credentialsRejected;
   }
 
   // ---------------------------------------------------------------------------
@@ -183,13 +281,10 @@ export class PetLibroAPI {
           : await this.http.post<ApiEnvelope<T>>(path, body, config);
         return resp.data;
       } catch (err) {
-        // Axios errors from HTTP-level failures (404, 500, etc.) are raised
-        // before we ever see an envelope. Attach enough context to debug
-        // which endpoint + payload combination the server rejected.
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (typeof status === 'number') {
           this.log.debug(
-            `HTTP ${status} on ${path} (body=${JSON.stringify(body).slice(0, 200)})`,
+            `HTTP ${status} on ${path} (body=${this.sanitizeForLog(body).slice(0, 200)})`,
           );
         }
         throw err;
@@ -212,14 +307,24 @@ export class PetLibroAPI {
       );
     }
 
-    // The HA integration treats a missing `data` field as `{}` for robustness.
     return (envelope.data ?? ({} as T));
+  }
+
+  /** Strip sensitive fields before serializing for debug logs. */
+  private sanitizeForLog(body: Record<string, unknown>): string {
+    const clone: Record<string, unknown> = { ...body };
+    if ('password' in clone) clone.password = '<redacted>';
+    if ('token' in clone) clone.token = '<redacted>';
+    try {
+      return JSON.stringify(clone);
+    } catch {
+      return '<unserializable>';
+    }
   }
 
   /**
    * POST a body that implicitly carries the device serial as both `id` and
-   * `deviceSn`. This matches how the HA integration's `post_serial` helper
-   * works — many endpoints accept either field name.
+   * `deviceSn`. Many endpoints accept either field name.
    */
   private async requestWithSerial<T = unknown>(
     path: string,
@@ -231,8 +336,7 @@ export class PetLibroAPI {
 
   /**
    * Cached request wrapper. Dedups rapid-fire identical calls within the
-   * RESPONSE_CACHE_TTL_MS window to avoid hammering the API during a polling
-   * cycle that touches many fields of the same device.
+   * RESPONSE_CACHE_TTL_MS window.
    */
   private async cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const entry = this.cache.get(key);
