@@ -1,0 +1,61 @@
+{
+  "pluginAlias": "PetLibro",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Homebridge plugin for PETLIBRO smart pet devices.\n\nBefore setup, review the [Account Management](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Account-Management) and [Password Limitations](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Password-Limitation) wiki pages — only one session can be logged in at a time, so consider creating a dedicated PETLIBRO account for Homebridge and sharing your devices to it.",
+  "footerDisplay": "For support, see the [GitHub issues](https://github.com/bwarren89/homebridge-petlibro-granary/issues).",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform Name",
+        "type": "string",
+        "default": "PetLibro",
+        "required": true
+      },
+      "email": {
+        "title": "PETLIBRO Account Email",
+        "type": "string",
+        "format": "email",
+        "required": true
+      },
+      "password": {
+        "title": "PETLIBRO Account Password",
+        "type": "string",
+        "required": true,
+        "description": "Your account password. It will be MD5-hashed before being sent to the API."
+      },
+      "region": {
+        "title": "Region",
+        "type": "string",
+        "default": "US",
+        "required": true,
+        "oneOf": [
+          { "title": "United States", "enum": ["US"] }
+        ]
+      },
+      "pollIntervalSeconds": {
+        "title": "Poll Interval (seconds)",
+        "type": "integer",
+        "default": 60,
+        "minimum": 30,
+        "maximum": 600,
+        "description": "How often to poll the PETLIBRO API for device state. Lower values increase responsiveness at the cost of more API calls."
+      },
+      "manualFeedPortions": {
+        "title": "Manual Feed Portions",
+        "type": "integer",
+        "default": 2,
+        "minimum": 1,
+        "maximum": 48,
+        "description": "Number of portions to dispense when the Manual Feed switch is triggered. 1 portion ≈ 1/12 cup on standard feeders."
+      },
+      "debug": {
+        "title": "Debug Logging",
+        "type": "boolean",
+        "default": false,
+        "description": "Enable verbose debug logs. Useful when reporting issues."
+      }
+    }
+  }
+}
