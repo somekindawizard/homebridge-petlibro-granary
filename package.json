@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge PETLIBRO Granary",
   "name": "homebridge-petlibro-granary",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Homebridge plugin for the PETLIBRO Granary Smart Feeder (PLAF103) and Granary Smart Camera Feeder (PLAF203). Ported from the jjjonesjr33/petlibro Home Assistant integration.",
   "license": "GPL-3.0-or-later",
   "author": {
@@ -16,7 +16,7 @@
     "url": "https://github.com/somekindawizard/homebridge-petlibro-granary/issues"
   },
   "engines": {
-    "node": "^18.17.0 || ^20.9.0 || ^22 || ^24",
+    "node": "^20.9.0 || ^22 || ^24",
     "homebridge": "^1.8.0 || ^2.0.0-beta.0"
   },
   "main": "dist/index.js",
@@ -29,8 +29,11 @@
   ],
   "scripts": {
     "build": "rimraf ./dist && tsc",
-    "lint": "eslint src/**/*.ts",
-    "prepublishOnly": "npm run build",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run lint && npm run test && npm run build",
     "watch": "npm run build && npm link && nodemon"
   },
   "keywords": [
@@ -48,10 +51,12 @@
     "@types/node": "^20.12.12",
     "@typescript-eslint/eslint-plugin": "^7.10.0",
     "@typescript-eslint/parser": "^7.10.0",
+    "@vitest/coverage-v8": "^1.6.0",
     "eslint": "^8.57.0",
     "homebridge": "^1.8.0",
     "nodemon": "^3.1.0",
     "rimraf": "^5.0.7",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
   }
 }
