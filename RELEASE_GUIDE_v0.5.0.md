@@ -1,11 +1,44 @@
 # v0.5.0 Release Guide
 
-End-to-end checklist for merging PR #3, bumping the version, and publishing
-`homebridge-petlibro-granary@0.5.0` to npm from your Mac mini.
+End-to-end checklist for merging the open PRs, bumping the version, and
+publishing `homebridge-petlibro-granary@0.5.0` to npm from your Mac mini.
 
 > **Repo location:** `~/Downloads/homebridge-petlibro-granary`
-> **PR to merge:** [#3 -- UX improvements](https://github.com/somekindawizard/homebridge-petlibro-granary/pull/3)
-> **Branch:** `ux-improvements`
+> **PRs to merge:** #1 (reliability), then #3 (UX improvements)
+> PR #2 is already closed and superseded by #3.
+
+---
+
+## ⚠️ READ THIS FIRST: Lockfile drift
+
+Every PR on this repo has the same problem: `package.json` was updated to
+newer dependency versions but `package-lock.json` was never regenerated.
+`npm ci` (used by GitHub Actions CI) is strict and refuses to install when
+they don't match, so **every PR will fail CI until you regenerate the
+lockfile on the branch**.
+
+The error looks like:
+```
+npm error `npm ci` can only install packages when your package.json and
+package-lock.json or npm-shrinkwrap.json are in sync.
+npm error Missing: @vitest/coverage-v8@4.x.x from lock file
+```
+
+**Fix (run on every PR branch before merging):**
+```bash
+git checkout <pr-branch>
+git pull
+rm -rf node_modules package-lock.json
+npm install
+npm run lint && npm test && npm run build
+git add package-lock.json
+git commit -m "chore: regenerate package-lock.json"
+git push
+```
+
+CI will re-run automatically and go green.
+
+This step is incorporated into the per-PR sections below.
 
 ---
 
@@ -13,17 +46,13 @@ End-to-end checklist for merging PR #3, bumping the version, and publishing
 
 | PR | Title | State | Action |
 |----|-------|-------|--------|
-| #1 | Reliability + security pass | **closed** (merged to main) | Nothing |
+| #1 | Reliability + security pass | **open** | Regen lockfile, then merge |
 | #2 | HomeKit UX overhaul (semantic types + emoji) | **closed** (superseded) | Nothing |
-| #3 | UX improvements (configurable services + tests + pet naming) | **open** | **Merge this** |
-
-Only **PR #3** needs to be merged. The reliability/security work from PR #1 is
-already on `main`. PR #2 was a superseded approach -- the same UX goals are
-achieved by PR #3 in a cleaner way.
+| #3 | UX improvements (configurable services + tests + pet naming) | **open** | Regen lockfile, then merge after #1 |
 
 ---
 
-## Step 1: Sync your local repo
+## Step 0: Sync your local repo
 
 ```bash
 cd ~/Downloads/homebridge-petlibro-granary
@@ -50,129 +79,162 @@ git stash push -m "wip before v0.5.0 release"
 
 ---
 
-## Step 2: Review PR #3 locally
+## Step 1: Merge PR #1 (Reliability + security)
+
+### 1a. Identify the PR #1 branch name
 
 ```bash
-# Checkout the PR branch
-git checkout ux-improvements
-git pull origin ux-improvements
-
-# See what changed vs main
-git log --oneline main..ux-improvements
-git diff main..ux-improvements --stat
+git branch -a | grep -v HEAD
+# Look for the PR #1 branch, probably "feature/reliability-and-polish"
+# or similar. You can also check on GitHub:
+# https://github.com/somekindawizard/homebridge-petlibro-granary/pull/1
 ```
 
-Expected files changed:
+For the rest of this section, replace `<pr1-branch>` with the actual name.
 
-| File | Purpose |
-|------|---------|
-| `config.schema.json` | Password masking, fieldset layout, `enabledServices` |
-| `src/settings.ts` | `GranaryServiceKey` type, `ALL_GRANARY_SERVICES` |
-| `src/accessories/granarySmartFeederAccessory.ts` | Conditional services, pet naming, `destroy()`, `ensureDisplayName()` |
-| `src/devices/device.ts` | `primaryPetName` getter |
-| `src/types/petlibroApi.ts` | `BoundPet` type, `// sic` comment |
-| `src/platform.ts` | `destroy()` calls in shutdown + pruneOrphans |
-| `src/__tests__/accessory.test.ts` | New test suite (25+ cases) |
-| `README.md` | Badges, install section, service docs, what's new |
-| `CHANGELOG.md` | v0.5.0 entry |
-
----
-
-## Step 3: Bump the version to 0.5.0
-
-The `package.json` on the branch is still at `0.4.0`. Bump it before publishing.
+### 1b. Regenerate the lockfile on the branch
 
 ```bash
-# While on ux-improvements branch
-npm version 0.5.0 --no-git-tag-version
-```
+git checkout <pr1-branch>
+git pull origin <pr1-branch>
 
-This updates `package.json` and `package-lock.json`. The `--no-git-tag-version`
-flag prevents npm from creating a tag immediately -- we'll tag after merging
-to main.
+# Nuke node_modules and the stale lockfile
+rm -rf node_modules package-lock.json
 
-Commit the bump:
-```bash
-git add package.json package-lock.json
-git commit -m "chore: bump version to 0.5.0"
-git push origin ux-improvements
-```
-
----
-
-## Step 4: Run the full validation suite
-
-```bash
+# Regenerate
 npm install
+
+# Validate everything still passes locally
 npm run lint
 npm test
 npm run build
 ```
 
-All four should pass cleanly. If `npm test` fails on the accessory tests due
-to mock shape issues, check `src/__tests__/accessory.test.ts` for any HAP
-constant mismatches with your installed `homebridge` version.
+If all four pass, commit and push:
+```bash
+git add package-lock.json
+git commit -m "chore: regenerate package-lock.json to match package.json"
+git push origin <pr1-branch>
+```
 
----
+### 1c. Wait for CI to go green
 
-## Step 5: Wait for CI to go green
-
-After your `git push` in Step 3, GitHub Actions will run lint + tests + build
-across Node 20 / 22 / 24. Verify on:
-
+Watch:
 https://github.com/somekindawizard/homebridge-petlibro-granary/actions
 
-Wait for all three Node versions to show green checkmarks before merging.
+All three Node versions (20 / 22 / 24) should show green checkmarks.
 
----
+### 1d. Merge PR #1
 
-## Step 6: Merge PR #3
+Pick one:
 
-You have three options. Pick one:
-
-### Option A: Merge via GitHub UI (recommended)
-
-1. Open https://github.com/somekindawizard/homebridge-petlibro-granary/pull/3
-2. Click **"Squash and merge"** (cleanest history) or **"Create a merge commit"** (preserves all 13 commits)
+**Option A: GitHub UI**
+1. Open https://github.com/somekindawizard/homebridge-petlibro-granary/pull/1
+2. Click **"Squash and merge"** (recommended for clean history)
 3. Confirm
 
-Then sync local:
+**Option B: gh CLI**
 ```bash
-git checkout main
-git pull origin main
+gh pr merge 1 --squash --delete-branch
 ```
 
-### Option B: Merge via gh CLI
-
-```bash
-# If you have GitHub CLI installed
-gh pr merge 3 --squash --delete-branch
-
-# Then sync local
-git checkout main
-git pull origin main
-```
-
-### Option C: Merge locally and push
-
+**Option C: Local merge**
 ```bash
 git checkout main
-git merge ux-improvements --no-ff -m "Merge PR #3: UX improvements"
+git merge <pr1-branch> --no-ff -m "Merge PR #1: Reliability + security pass"
 git push origin main
+git branch -d <pr1-branch>
+git push origin --delete <pr1-branch>
+```
 
-# Optionally delete the feature branch
-git branch -d ux-improvements
-git push origin --delete ux-improvements
+### 1e. Sync local main
+
+```bash
+git checkout main
+git pull origin main
 ```
 
 ---
 
-## Step 7: Tag the release
+## Step 2: Merge PR #3 (UX improvements)
+
+PR #3 was branched off main *before* PR #1 was merged, so it now needs to be
+brought up to date with main. Two paths:
+
+### 2a. Update PR #3 with main
 
 ```bash
-# Make sure you're on main with the merge commit
+git checkout ux-improvements
+git pull origin ux-improvements
+
+# Bring in the PR #1 changes from main
+git merge main
+# (or: git rebase main, if you prefer linear history)
+```
+
+If there are merge conflicts, resolve them in your editor, then:
+```bash
+git add <conflicted-files>
+git commit  # for merge
+# OR
+git rebase --continue  # for rebase
+```
+
+### 2b. Regenerate the lockfile on PR #3
+
+Same drill as PR #1:
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npm run lint && npm test && npm run build
+git add package-lock.json
+git commit -m "chore: regenerate package-lock.json"
+```
+
+### 2c. Bump version to 0.5.0
+
+The `package.json` on the branch is still at `0.4.0`. Bump it now so it
+ships with the release:
+
+```bash
+npm version 0.5.0 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: bump version to 0.5.0"
+```
+
+### 2d. Push everything
+
+```bash
+git push origin ux-improvements
+# OR if you rebased:
+git push origin ux-improvements --force-with-lease
+```
+
+### 2e. Wait for CI to go green
+
+Same URL as before; verify all three Node versions pass.
+
+### 2f. Merge PR #3
+
+```bash
+gh pr merge 3 --squash --delete-branch
+# OR via GitHub UI: "Squash and merge"
+
 git checkout main
 git pull origin main
+```
+
+---
+
+## Step 3: Tag the release
+
+```bash
+git checkout main
+git pull origin main
+
+# Verify package.json shows 0.5.0
+cat package.json | grep version
+# Expected: "version": "0.5.0",
 
 # Create an annotated tag
 git tag -a v0.5.0 -m "Release v0.5.0 -- UX improvements"
@@ -181,15 +243,11 @@ git tag -a v0.5.0 -m "Release v0.5.0 -- UX improvements"
 git push origin v0.5.0
 ```
 
-This tag will be visible on the GitHub releases page and is the canonical
-reference for the npm version.
-
 ---
 
-## Step 8: Create a GitHub release (optional but recommended)
+## Step 4: Create a GitHub release
 
 ```bash
-# Via gh CLI
 gh release create v0.5.0 \
   --title "v0.5.0 -- UX improvements" \
   --notes-file CHANGELOG.md \
@@ -205,27 +263,24 @@ Or via web UI:
 
 ---
 
-## Step 9: Publish to npm
+## Step 5: Publish to npm
 
-### One-time setup (skip if already done)
+### 5a. One-time setup (skip if already done)
 
 ```bash
-# Verify Node version (should be 20+)
 node --version
+# Should be 20+
 
-# Check npm is up to date
 npm install -g npm@latest
 
-# Log in to npm (opens browser for OAuth)
 npm login
+# Opens browser for OAuth
 ```
 
-If this is your first publish for `homebridge-petlibro-granary`, you'll also
-need an npm account at https://www.npmjs.com/signup.
+If this is your first publish for `homebridge-petlibro-granary`, you'll
+also need an npm account at https://www.npmjs.com/signup.
 
-### Verify the publish payload
-
-Before publishing, dry-run to see what files will be included:
+### 5b. Verify the publish payload
 
 ```bash
 npm pack --dry-run
@@ -241,23 +296,19 @@ You should see:
 
 If `dist/` isn't there, run `npm run build` first.
 
-### Publish
+### 5c. Publish
 
 ```bash
-# Make sure you're at the v0.5.0 commit
 git checkout main
 git pull origin main
 git status  # should be clean
 
-# Build fresh
 npm run build
 
-# Publish (this is the irreversible step)
+# This is the irreversible step
 npm publish
-```
 
-For the first publish on a public package, you may need:
-```bash
+# Or if it's the first publish on a public package:
 npm publish --access public
 ```
 
@@ -265,53 +316,43 @@ If you have 2FA enabled on npm (you should), it'll prompt for an OTP.
 
 ---
 
-## Step 10: Verify the publish
+## Step 6: Verify the publish
 
 ```bash
-# Check the listing
-npm view homebridge-petlibro-granary
-
-# Check the version specifically
 npm view homebridge-petlibro-granary version
 # Expected: 0.5.0
 
-# Try installing it fresh in a temp dir
+# Try installing fresh in a temp dir
 cd /tmp
 mkdir test-install && cd test-install
 npm install homebridge-petlibro-granary
 ls node_modules/homebridge-petlibro-granary/dist/
-# Should see the compiled .js files
+# Should see compiled .js files
 ```
 
-Also verify on the npm web UI:
+Verify on the npm web UI:
 https://www.npmjs.com/package/homebridge-petlibro-granary
-
-The README badge in your repo should auto-update to show `v0.5.0` within a
-few minutes.
 
 ---
 
-## Step 11: Smoke test on real Homebridge
+## Step 7: Smoke test on real Homebridge
 
 This is the most important step.
 
 ```bash
-# On your Homebridge machine (could be the same Mac mini)
+# On your Homebridge machine
 sudo npm install -g homebridge-petlibro-granary@0.5.0
-
-# Restart Homebridge
 sudo hb-service restart
 # OR
 sudo systemctl restart homebridge
 ```
 
 Open the Homebridge UI:
-1. Go to the Plugins tab
-2. Verify `homebridge-petlibro-granary` shows v0.5.0
-3. Click Settings on the plugin
-4. Confirm the new fieldset layout (Account / Feeder Settings / HomeKit Services / Advanced)
-5. Confirm the password field is masked
-6. Confirm the `enabledServices` checkboxes appear
+1. Plugins tab -- verify `homebridge-petlibro-granary` shows v0.5.0
+2. Click Settings on the plugin
+3. Confirm the new fieldset layout (Account / Feeder Settings / HomeKit Services / Advanced)
+4. Confirm the password field is masked
+5. Confirm the `enabledServices` checkboxes appear
 
 Open the Home app on your iPhone:
 1. Find your Granary feeder accessory
@@ -323,9 +364,7 @@ Open the Home app on your iPhone:
 
 ### Validate the boundPets API shape
 
-This was flagged as uncertain. Add this to your Homebridge config to confirm
-the pet name field is correctly mapped:
-
+Add `debug: true` to your Homebridge config:
 ```json
 {
   "platform": "PetLibro",
@@ -334,31 +373,30 @@ the pet name field is correctly mapped:
 }
 ```
 
-Restart Homebridge, then check the logs:
+Restart and check logs:
 ```bash
 hb-service logs
 # OR
 tail -f ~/.homebridge/homebridge.log
 ```
 
-Look for the `boundPets` payload. The plugin currently reads `name` with a
-fallback to `petName`. If the API actually returns the pet name under a
-different key (like `nickName` or `petAlias`), the labels will fall back to
-the device name. That's not a crash -- but if you want pet-aware labels,
-file an issue with the actual payload structure and I'll patch it.
+Look for the `boundPets` payload. The plugin reads `name` with a fallback
+to `petName`. If the API returns the pet name under a different key,
+labels fall back to the device name -- not a crash, but if you want
+pet-aware labels, file an issue with the actual payload structure.
 
-Once you've confirmed it works, set `debug: false` to quiet the logs.
+Once verified, set `debug: false` to quiet the logs.
 
 ---
 
-## Step 12: Post-release housekeeping
+## Step 8: Post-release housekeeping
 
 ```bash
-# Clean up any stash from Step 1
+# Clean up any stash from Step 0
 git stash list
-git stash drop  # if you stashed and don't need it
+git stash drop
 
-# Delete the docs/release-guide branch (after you've used this guide)
+# Delete the release-guide branch when you're done with this doc
 git push origin --delete docs/release-guide
 ```
 
@@ -371,21 +409,19 @@ https://github.com/somekindawizard/homebridge-petlibro-granary/issues
 
 ### npm rollback
 
-You **cannot** unpublish a version after 72 hours, and even within 72 hours
-it's strongly discouraged. Instead, deprecate and publish a fix:
+You **cannot** unpublish a version after 72 hours, and even within 72
+hours it's strongly discouraged. Instead, deprecate and publish a fix:
 
 ```bash
-# Mark v0.5.0 as deprecated with a message
 npm deprecate homebridge-petlibro-granary@0.5.0 "Critical bug; please upgrade to 0.5.1"
 
-# Then fix the bug, bump to 0.5.1, and publish again
+# Fix the bug, bump, publish
 npm version 0.5.1
 npm publish
 ```
 
 ### Homebridge rollback (for users)
 
-If a user reports v0.5.0 breaks their setup:
 ```bash
 sudo npm install -g homebridge-petlibro-granary@0.4.0
 sudo hb-service restart
@@ -403,38 +439,47 @@ cd ~/Downloads/homebridge-petlibro-granary
 git fetch --all --prune --tags
 git checkout main && git pull origin main
 
-# Review PR #3
-git checkout ux-improvements
-git pull origin ux-improvements
-git log --oneline main..ux-improvements
+# ===== PR #1 =====
+git branch -a | grep -i reliability  # find the PR1 branch name
+git checkout <pr1-branch>
+git pull origin <pr1-branch>
+rm -rf node_modules package-lock.json
+npm install
+npm run lint && npm test && npm run build
+git add package-lock.json
+git commit -m "chore: regenerate package-lock.json"
+git push origin <pr1-branch>
 
-# Bump version
-npm version 0.5.0 --no-git-tag-version
-git add package.json package-lock.json
-git commit -m "chore: bump version to 0.5.0"
-git push origin ux-improvements
-
-# Validate
-npm install && npm run lint && npm test && npm run build
-
-# Merge (via gh CLI)
-gh pr merge 3 --squash --delete-branch
-
-# Sync
+# Wait for CI green, then:
+gh pr merge 1 --squash --delete-branch
 git checkout main && git pull origin main
 
-# Tag
+# ===== PR #3 =====
+git checkout ux-improvements
+git pull origin ux-improvements
+git merge main  # bring in PR #1 changes
+rm -rf node_modules package-lock.json
+npm install
+npm run lint && npm test && npm run build
+npm version 0.5.0 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: bump to 0.5.0 and regenerate lockfile"
+git push origin ux-improvements
+
+# Wait for CI green, then:
+gh pr merge 3 --squash --delete-branch
+git checkout main && git pull origin main
+
+# ===== Release =====
 git tag -a v0.5.0 -m "Release v0.5.0 -- UX improvements"
 git push origin v0.5.0
-
-# Release
 gh release create v0.5.0 --title "v0.5.0 -- UX improvements" --notes-file CHANGELOG.md --latest
 
-# Publish
+# ===== Publish =====
 npm run build
 npm publish
 
-# Verify
+# ===== Verify =====
 npm view homebridge-petlibro-granary version
 ```
 
@@ -444,10 +489,12 @@ npm view homebridge-petlibro-granary version
 
 | Symptom | Fix |
 |---------|-----|
-| `npm test` fails with HAP constant errors | Check that `homebridge` peer dep is installed: `npm install homebridge@^1.8.0` |
+| `npm ci` fails with "Missing: ... from lock file" | Regenerate the lockfile (see Step 1b / 2b) |
+| `npm test` fails with HAP constant errors | Verify peer dep: `npm install homebridge@^1.8.0` |
 | `npm publish` says "you must be logged in" | Run `npm login` |
 | `npm publish` says "package already exists at this version" | Bump the version: `npm version patch` |
 | `npm publish` says "402 payment required" | Add `--access public` flag |
-| `gh pr merge` not found | Install GitHub CLI: `brew install gh && gh auth login` |
-| Tests pass locally but CI fails | Check Node version mismatch; CI runs on 20/22/24 |
-| Pet name not showing up in Home app | Check logs with `debug: true` for actual `boundPets` shape |
+| `gh pr merge` not found | `brew install gh && gh auth login` |
+| Tests pass locally but CI fails | Check Node version (CI runs 20/22/24) and lockfile state |
+| Pet name not showing in Home app | Check logs with `debug: true` for actual `boundPets` shape |
+| Merge conflicts when bringing main into PR #3 | Resolve in editor, `git add`, `git commit` (or `git rebase --continue`) |
