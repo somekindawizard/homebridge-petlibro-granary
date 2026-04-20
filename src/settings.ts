@@ -12,7 +12,7 @@ export const PETLIBRO_APPSN = 'c35772530d1041699c87fe62348507a8';
 
 /**
  * Supported regions. Add new entries to API_URLS as base URLs become known
- * — the EU/AU shards exist on PETLIBRO's side but the upstream HA project
+ * -- the EU/AU shards exist on PETLIBRO's side but the upstream HA project
  * has only verified the US base URL.
  */
 export type PetLibroRegion = 'US';
@@ -42,7 +42,7 @@ export const SLOW_TIER_POLL_INTERVAL_SECONDS = 5 * 60;
 export const FAST_POLL_INTERVAL_SECONDS = 15;
 export const FAST_POLL_DURATION_MS = 2 * 60_000;
 
-/** ±ratio of jitter applied to poll cycles to desynchronize bridges. */
+/** +/-ratio of jitter applied to poll cycles to desynchronize bridges. */
 export const POLL_JITTER_RATIO = 0.1;
 
 /** Error code returned by the API when the session token has expired. */
@@ -53,13 +53,13 @@ export const API_CODE_SUCCESS = 0;
 
 /**
  * Codes that indicate a permanent credential problem (wrong email/password).
- * When the API returns one of these, we do *not* re-attempt login — that
+ * When the API returns one of these, we do *not* re-attempt login -- that
  * way a typo doesn't trigger an infinite re-login storm.
  *
  * Observed in the wild from the upstream HA integration:
- *   1003 — account not found
- *   1004 — wrong password
- *   1005 — account locked
+ *   1003 -- account not found
+ *   1004 -- wrong password
+ *   1005 -- account locked
  */
 export const API_CODES_BAD_CREDENTIALS = new Set([1003, 1004, 1005]);
 
@@ -78,6 +78,45 @@ export const MOMENTARY_SWITCH_RESET_MS = 1_000;
 /** Debounce window for accessory-driven refresh after a Switch toggle. */
 export const POST_MUTATION_REFRESH_DEBOUNCE_MS = 250;
 
+// ---------------------------------------------------------------------------
+// Configurable HomeKit service keys
+// ---------------------------------------------------------------------------
+
+/**
+ * Identifiers for optional HomeKit services on the Granary accessory.
+ * Battery is always present and not included here.
+ */
+export type GranaryServiceKey =
+  | 'foodLow'
+  | 'dispenser'
+  | 'desiccantMaintenance'
+  | 'recentFeed'
+  | 'feedNow'
+  | 'feedingSchedule'
+  | 'indicator'
+  | 'childLock'
+  | 'resetDesiccant';
+
+/**
+ * All available service keys. Used as the default when the user omits
+ * enabledServices from config (backward compatible: everything on).
+ */
+export const ALL_GRANARY_SERVICES: readonly GranaryServiceKey[] = [
+  'foodLow',
+  'dispenser',
+  'desiccantMaintenance',
+  'recentFeed',
+  'feedNow',
+  'feedingSchedule',
+  'indicator',
+  'childLock',
+  'resetDesiccant',
+];
+
+// ---------------------------------------------------------------------------
+// Plugin config shape
+// ---------------------------------------------------------------------------
+
 /** Plugin configuration shape loaded from config.json. */
 export interface PetLibroPluginConfig {
   platform: string;
@@ -88,5 +127,6 @@ export interface PetLibroPluginConfig {
   pollIntervalSeconds?: number;
   manualFeedPortions?: number;
   desiccantCycleDays?: number;
+  enabledServices?: GranaryServiceKey[];
   debug?: boolean;
 }
