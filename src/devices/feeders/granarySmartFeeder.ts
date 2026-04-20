@@ -23,7 +23,7 @@ export class GranarySmartFeeder extends Device {
    *   the fast-changing ones (realInfo, grainStatus, workRecord) to reduce
    *   API load on the standard polling cadence.
    */
-  async refresh(mode: 'full' | 'light' = 'full'): Promise<void> {
+  override async refresh(mode: 'full' | 'light' = 'full'): Promise<void> {
     if (mode === 'full') {
       await super.refresh();
     }
