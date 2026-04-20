@@ -43,18 +43,22 @@ fountains, Luma litter box) are out of scope for this plugin.
 
 ## HomeKit mapping
 
-| HomeKit service              | What it reports / controls                                   |
-|------------------------------|--------------------------------------------------------------|
-| Battery                      | Battery %, low-battery flag, charging state (CHARGING / NOT_CHARGING / NOT_CHARGEABLE) |
-| Occupancy Sensor: Food Low   | Occupied = food is low                                       |
-| Occupancy Sensor: Dispenser  | Occupied = grain outlet is blocked / jammed                  |
-| Filter Maintenance: Desiccant | "Change Filter" when remaining days <= 0; life level shown as 0-100% against the configured cycle (default 30 days) |
-| Contact Sensor: Recent Feed  | Briefly opens (CONTACT_NOT_DETECTED) for 30s when a new successful feed event is detected; pulses immediately for plugin-initiated feeds, otherwise on next poll |
-| Switch: Feed Now             | Momentary: dispenses configured portion count. Skipped when offline or in sleep mode |
-| Switch: Feeding Schedule     | Enable/disable the recurring feeding plan                    |
-| Switch: Indicator            | Turns the on-device LED on/off                               |
-| Switch: Child Lock           | Locks/unlocks the hardware buttons                           |
-| Switch: Reset Desiccant      | Momentary: resets the desiccant-life day counter             |
+Service names adapt to your setup. If you have a pet named "Mochi" bound to
+the feeder in the PETLIBRO app, tiles will read "Feed Mochi", "Mochi Food Low",
+etc. Otherwise they use the device name you set in the app.
+
+| HomeKit service                  | What it reports / controls                                   |
+|----------------------------------|--------------------------------------------------------------|
+| Battery                          | Battery %, low-battery flag, charging state (CHARGING / NOT_CHARGING / NOT_CHARGEABLE) |
+| Occupancy Sensor: Food Low       | Occupied = food is low                                       |
+| Occupancy Sensor: Feeder Jam     | Occupied = grain outlet is blocked / jammed                  |
+| Filter Maintenance: Desiccant    | "Change Filter" when remaining days <= 0; life level shown as 0-100% against the configured cycle (default 30 days) |
+| Contact Sensor: Last Fed         | Briefly opens (CONTACT_NOT_DETECTED) for 30s when a new successful feed event is detected; pulses immediately for plugin-initiated feeds, otherwise on next poll |
+| Switch: Feed Now                 | Momentary: dispenses configured portion count. Skipped when offline or in sleep mode |
+| Switch: Schedule                 | Enable/disable the recurring feeding plan                    |
+| Switch: Indicator                | Turns the on-device LED on/off                               |
+| Switch: Child Lock               | Locks/unlocks the hardware buttons                           |
+| Switch: Replace Desiccant        | Momentary: resets the desiccant-life day counter             |
 
 > **Tip:** Battery is always shown. All other services are optional. See the
 > `enabledServices` config below to choose which tiles appear in the Home app.
@@ -102,17 +106,17 @@ This gives you a Feed Now button, a low-food alert, and a schedule toggle,
 plus the always-present Battery tile. You can always add services back later;
 just restart Homebridge after changing the config.
 
-| Key                    | Service                              |
-|------------------------|--------------------------------------|
-| `feedNow`              | Feed Now (momentary switch)          |
-| `feedingSchedule`      | Feeding Schedule (on/off switch)     |
-| `foodLow`              | Food Low (occupancy sensor)          |
-| `dispenser`            | Dispenser Jam (occupancy sensor)     |
-| `desiccantMaintenance` | Desiccant Life (filter maintenance)  |
-| `recentFeed`           | Recent Feed (contact sensor pulse)   |
-| `indicator`            | Indicator Light (on/off switch)      |
-| `childLock`            | Child Lock (on/off switch)           |
-| `resetDesiccant`       | Reset Desiccant (momentary switch)   |
+| Key                    | Service                                  |
+|------------------------|------------------------------------------|
+| `feedNow`              | Feed Now / Feed [Pet] (momentary switch) |
+| `feedingSchedule`      | Schedule (on/off switch)                 |
+| `foodLow`              | Food Low (occupancy sensor)              |
+| `dispenser`            | Feeder Jam (occupancy sensor)            |
+| `desiccantMaintenance` | Desiccant Life (filter maintenance)      |
+| `recentFeed`           | Last Fed (contact sensor pulse)          |
+| `indicator`            | Indicator Light (on/off switch)          |
+| `childLock`            | Child Lock (on/off switch)               |
+| `resetDesiccant`       | Replace Desiccant (momentary switch)     |
 
 ### Use a dedicated PETLIBRO account
 
@@ -186,6 +190,13 @@ Normal: the Granary is mains-powered and reports 0% with `chargingState =
 NOT_CHARGEABLE` when no D-cell backup batteries are installed. The plugin
 suppresses the StatusLowBattery flag in this state.
 
+### Service names didn't update after upgrading
+
+As of v0.5.0 the plugin pushes updated display names to cached services on
+every startup. If you're upgrading from an older version, just restart
+Homebridge and the new labels (pet-aware or improved defaults) will appear
+automatically. No need to remove and re-add the accessory.
+
 ### Reset / start fresh
 
 ```bash
@@ -195,14 +206,23 @@ rm <homebridge-storage>/homebridge-petlibro-granary-token.json
 
 ## What's new in 0.5.0
 
+- **Pet-aware service names.** Tiles now use your pet's name from the PETLIBRO
+  app: "Feed Mochi", "Mochi Food Low", etc. Falls back to the device name when
+  no pet is bound.
 - **Configurable HomeKit services.** Choose which tiles appear in the Home app
   via the `enabledServices` config array. Disable services you don't need to
   reduce clutter.
 - **Improved config UI.** Password field is now masked. Settings are grouped
   into Account, Feeder Settings, HomeKit Services, and Advanced sections.
   Service selection uses checkboxes.
-- **Accessory-layer test coverage.** New unit tests for battery logic,
-  desiccant calculations, and service opt-in behavior.
+- **Friendlier default labels.** "Dispenser" is now "Feeder Jam", "Recent Feed"
+  is now "Last Fed", "Reset Desiccant" is now "Replace Desiccant".
+- **Cached name updates.** Upgrading from an older version? Service names
+  update automatically on restart. No need to remove accessories.
+- **Timer cleanup.** Outstanding timers are properly cleared when accessories
+  are removed or Homebridge shuts down.
+- **Expanded test coverage.** 25+ new tests for battery logic, desiccant
+  calculations, service opt-in, pet-aware naming, and lifecycle safety.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
