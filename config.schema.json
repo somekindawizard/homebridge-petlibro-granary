@@ -24,7 +24,10 @@
         "title": "PETLIBRO Account Password",
         "type": "string",
         "required": true,
-        "description": "Stored in plaintext in your Homebridge config. The plugin MD5-hashes it before sending to the API, but the original is needed to log in. Use a unique password for this account."
+        "x-schema-form": {
+          "type": "password"
+        },
+        "description": "Use a unique password for this dedicated account. Stored in your Homebridge config file and MD5-hashed before being sent to the PETLIBRO API."
       },
       "region": {
         "title": "Region",
@@ -33,7 +36,8 @@
         "required": true,
         "oneOf": [
           { "title": "United States", "enum": ["US"] }
-        ]
+        ],
+        "description": "Only the US region is currently supported. EU and AU support is planned for a future release."
       },
       "pollIntervalSeconds": {
         "title": "Poll Interval (seconds)",
@@ -41,7 +45,7 @@
         "default": 60,
         "minimum": 30,
         "maximum": 600,
-        "description": "Fast-tier polling cadence for live state (food level, online, etc.). Slow-tier endpoints (feeding plan, OTA, attribute settings) refresh every 5 minutes regardless. After any user action, polling temporarily speeds up to 15s for 2 minutes."
+        "description": "Fast-tier polling cadence for live state (food level, online status, etc.). Slow-tier endpoints refresh every 5 minutes regardless. After any user action, polling temporarily speeds up to 15 seconds for 2 minutes."
       },
       "manualFeedPortions": {
         "title": "Manual Feed Portions",
@@ -49,7 +53,7 @@
         "default": 2,
         "minimum": 1,
         "maximum": 48,
-        "description": "Number of portions to dispense when the Manual Feed switch is triggered. 1 portion ≈ 1/12 cup on standard feeders."
+        "description": "Number of portions to dispense when the Feed Now switch is triggered. 1 portion is roughly 1/12 cup on standard Granary feeders."
       },
       "desiccantCycleDays": {
         "title": "Desiccant Cycle (days)",
@@ -57,7 +61,38 @@
         "default": 30,
         "minimum": 7,
         "maximum": 180,
-        "description": "How many days a fresh desiccant pack lasts. Used to compute the FilterLifeLevel percentage shown in the Eve app and similar."
+        "description": "How many days a fresh desiccant pack lasts. Used to calculate the filter life percentage shown in the Eve app and similar HomeKit clients."
+      },
+      "enabledServices": {
+        "title": "Enabled HomeKit Services",
+        "type": "array",
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "oneOf": [
+            { "title": "Feed Now (momentary switch)", "enum": ["feedNow"] },
+            { "title": "Feeding Schedule (on/off switch)", "enum": ["feedingSchedule"] },
+            { "title": "Food Low (occupancy sensor)", "enum": ["foodLow"] },
+            { "title": "Dispenser Jam (occupancy sensor)", "enum": ["dispenser"] },
+            { "title": "Desiccant Life (filter maintenance)", "enum": ["desiccantMaintenance"] },
+            { "title": "Recent Feed (contact sensor pulse)", "enum": ["recentFeed"] },
+            { "title": "Indicator Light (on/off switch)", "enum": ["indicator"] },
+            { "title": "Child Lock (on/off switch)", "enum": ["childLock"] },
+            { "title": "Reset Desiccant (momentary switch)", "enum": ["resetDesiccant"] }
+          ]
+        },
+        "default": [
+          "feedNow",
+          "feedingSchedule",
+          "foodLow",
+          "dispenser",
+          "desiccantMaintenance",
+          "recentFeed",
+          "indicator",
+          "childLock",
+          "resetDesiccant"
+        ],
+        "description": "Choose which services appear as tiles in the Home app. Battery is always included. Disable services you don't need to reduce tile clutter. For a minimal setup, try just Feed Now, Food Low, and Feeding Schedule."
       },
       "debug": {
         "title": "Debug Logging",
@@ -66,5 +101,34 @@
         "description": "Enable verbose debug logs. Useful when reporting issues."
       }
     }
-  }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Account",
+      "items": ["name", "email", "password", "region"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Feeder Settings",
+      "items": ["manualFeedPortions", "desiccantCycleDays"]
+    },
+    {
+      "type": "fieldset",
+      "title": "HomeKit Services",
+      "description": "Select which services to expose in the Home app. Battery is always included.",
+      "items": [
+        {
+          "key": "enabledServices",
+          "type": "checkboxes"
+        }
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced",
+      "expandable": true,
+      "items": ["pollIntervalSeconds", "debug"]
+    }
+  ]
 }
