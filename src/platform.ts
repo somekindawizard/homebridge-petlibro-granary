@@ -34,13 +34,13 @@ type AccessoryHandler = GranarySmartFeederAccessory;
  *
  * Polling architecture:
  *   - Fast tier (every pollIntervalSeconds, default 60s):
- *       device.refresh('light') — only realInfo, grainStatus, workRecord.
+ *       device.refresh('light') -- only realInfo, grainStatus, workRecord.
  *   - Slow tier (every SLOW_TIER_POLL_INTERVAL_SECONDS, default 5min):
- *       device.refresh('full') — adds attribute settings, OTA, plan list.
+ *       device.refresh('full') -- adds attribute settings, OTA, plan list.
  *   - Adaptive boost: after a user-initiated mutation we drop to
  *       FAST_POLL_INTERVAL_SECONDS (15s) for FAST_POLL_DURATION_MS (2min)
  *       so the UI reflects the new state quickly.
- *   - Each tick has ±POLL_JITTER_RATIO randomization so multiple
+ *   - Each tick has +/-POLL_JITTER_RATIO randomization so multiple
  *       Homebridge instances don't all hit PETLIBRO at the same instant.
  */
 export class PetLibroPlatform implements DynamicPlatformPlugin {
@@ -81,9 +81,15 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
       if (this.slowPollTimer) clearInterval(this.slowPollTimer);
       this.fastPollTimer = null;
       this.slowPollTimer = null;
+
+      // Destroy all handlers so outstanding timers don't fire post-shutdown.
+      for (const handler of this.handlers.values()) {
+        handler.destroy();
+      }
+
       // Best-effort logout to release the single-session slot. We bound
       // this to 3s so we don't hang Homebridge shutdown if PETLIBRO is
-      // unresponsive — the session will eventually time out server-side.
+      // unresponsive -- the session will eventually time out server-side.
       const client = this.apiClient;
       if (client) {
         Promise.race([
@@ -209,6 +215,19 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
     const orphans = this.restoredAccessories.filter((a) => !activeUuids.has(a.UUID));
     if (orphans.length) {
       this.log.info(`Removing ${orphans.length} stale accessor(ies).`);
+
+      // Destroy handlers for orphaned accessories so their timers are cleared.
+      for (const orphan of orphans) {
+        const serial = orphan.context?.serial as string | undefined;
+        if (serial) {
+          const handler = this.handlers.get(serial);
+          if (handler) {
+            handler.destroy();
+            this.handlers.delete(serial);
+          }
+        }
+      }
+
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, orphans);
     }
   }
@@ -268,7 +287,7 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
 
   private async pollAll(mode: 'full' | 'light'): Promise<void> {
     if (this.apiClient?.isCredentialsRejected()) {
-      // Don't keep poking the API — the credentials have been rejected.
+      // Don't keep poking the API -- the credentials have been rejected.
       return;
     }
     for (const [serial, device] of this.devices) {
@@ -302,10 +321,10 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
         this.log.debug('Loaded cached PETLIBRO token from disk.');
         return decrypted;
       }
-      // Legacy plaintext file or fingerprint mismatch — drop it.
+      // Legacy plaintext file or fingerprint mismatch -- drop it.
       this.log.debug('Discarding stale/invalid cached token; will re-login.');
     } catch {
-      // No token cached yet — normal on first run.
+      // No token cached yet -- normal on first run.
     }
     return null;
   }

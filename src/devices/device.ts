@@ -11,7 +11,7 @@ import { DeviceRawData } from '../types/petlibroApi';
  * methods, and overrides `refresh()` to pull in device-specific endpoints.
  *
  * Data is held in `raw` as a merged dictionary that matches the Python
- * integration's `_data` dict — this lets us keep the property accessors
+ * integration's `_data` dict -- this lets us keep the property accessors
  * structurally identical and reduces porting risk as we add more devices.
  */
 export abstract class Device {
@@ -172,6 +172,24 @@ export abstract class Device {
     const state = this.raw.deviceShareState;
     // 1 = Shared with me; 2 = Owned, shared; 3 = Owned, not shared.
     return state === 2 || state === 3 || state === undefined;
+  }
+
+  /**
+   * Name of the first bound pet, or null if no pets are bound.
+   *
+   * Used by the accessory layer to build friendlier HomeKit service
+   * labels (e.g. "Feed Mochi" instead of "Test Feeder Feed Now").
+   * Only the first pet is used because most single-feeder setups have
+   * one pet; multi-pet names would make labels too long.
+   */
+  get primaryPetName(): string | null {
+    const pets = this.raw.boundPets;
+    if (!Array.isArray(pets) || pets.length === 0) return null;
+    const first = pets[0] as Record<string, unknown> | undefined;
+    const name = first?.name ?? first?.petName;
+    return typeof name === 'string' && name.trim().length > 0
+      ? name.trim()
+      : null;
   }
 
   // ---- Helpers for subclasses ----
