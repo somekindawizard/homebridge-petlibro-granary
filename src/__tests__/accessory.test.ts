@@ -367,4 +367,105 @@ describe('GranarySmartFeederAccessory', () => {
       expect(() => handler.refreshCharacteristics()).not.toThrow();
     });
   });
+
+  describe('pet-aware naming', () => {
+    it('uses pet name in service labels when a pet is bound', () => {
+      const accessory = createMockAccessory();
+      const platform = createMockPlatform({
+        enabledServices: ['feedNow', 'foodLow'],
+      });
+      const device = makeFeeder();
+      device.updateData({ boundPets: [{ name: 'Mochi' }] });
+      new GranarySmartFeederAccessory(platform, accessory as never, device);
+
+      const addCalls = accessory.addService.mock.calls;
+      const labels = addCalls.map((c: unknown[]) => c[1]);
+
+      // Feed Now should be "Feed Mochi"
+      expect(labels).toContain('Feed Mochi');
+      // Food Low should be "Mochi Food Low"
+      expect(labels).toContain('Mochi Food Low');
+    });
+
+    it('falls back to device name when no pets are bound', () => {
+      const accessory = createMockAccessory();
+      const platform = createMockPlatform({
+        enabledServices: ['feedNow'],
+      });
+      const device = makeFeeder({ name: 'Kitchen Feeder' });
+      new GranarySmartFeederAccessory(platform, accessory as never, device);
+
+      const addCalls = accessory.addService.mock.calls;
+      const labels = addCalls.map((c: unknown[]) => c[1]);
+
+      expect(labels).toContain('Kitchen Feeder Feed Now');
+    });
+
+    it('uses petName field as fallback when name is missing', () => {
+      const accessory = createMockAccessory();
+      const platform = createMockPlatform({
+        enabledServices: ['feedNow'],
+      });
+      const device = makeFeeder();
+      device.updateData({ boundPets: [{ petName: 'Luna' }] });
+      new GranarySmartFeederAccessory(platform, accessory as never, device);
+
+      const addCalls = accessory.addService.mock.calls;
+      const labels = addCalls.map((c: unknown[]) => c[1]);
+
+      expect(labels).toContain('Feed Luna');
+    });
+  });
+
+  describe('primaryPetName on Device', () => {
+    it('returns null when no boundPets', () => {
+      const device = makeFeeder();
+      expect(device.primaryPetName).toBeNull();
+    });
+
+    it('returns null when boundPets is empty', () => {
+      const device = makeFeeder();
+      device.updateData({ boundPets: [] });
+      expect(device.primaryPetName).toBeNull();
+    });
+
+    it('returns the first pet name', () => {
+      const device = makeFeeder();
+      device.updateData({ boundPets: [{ name: 'Mochi' }, { name: 'Luna' }] });
+      expect(device.primaryPetName).toBe('Mochi');
+    });
+
+    it('trims whitespace from pet name', () => {
+      const device = makeFeeder();
+      device.updateData({ boundPets: [{ name: '  Mochi  ' }] });
+      expect(device.primaryPetName).toBe('Mochi');
+    });
+
+    it('returns null when pet name is empty string', () => {
+      const device = makeFeeder();
+      device.updateData({ boundPets: [{ name: '   ' }] });
+      expect(device.primaryPetName).toBeNull();
+    });
+
+    it('falls back to petName field when name is missing', () => {
+      const device = makeFeeder();
+      device.updateData({ boundPets: [{ petName: 'Luna' }] });
+      expect(device.primaryPetName).toBe('Luna');
+    });
+  });
+
+  describe('destroy', () => {
+    it('clears outstanding timers without throwing', () => {
+      const handler = createAccessoryHandler();
+      // Should not throw even if no timers are active
+      expect(() => handler.destroy()).not.toThrow();
+    });
+
+    it('can be called multiple times safely', () => {
+      const handler = createAccessoryHandler();
+      handler.destroy();
+      handler.destroy();
+      // No assertion needed -- just verifying it doesn't throw
+    });
+  });
 });
