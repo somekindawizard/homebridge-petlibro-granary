@@ -25,6 +25,10 @@ import { debounce } from '../util/jitter';
  * `enabledServices` config array. When omitted, all services are enabled
  * for backward compatibility.
  *
+ * Service labels use the bound pet's name when available (e.g. "Feed Mochi"
+ * instead of "Kitchen Feeder Feed Now"). Falls back to the device name
+ * when no pet is bound.
+ *
  *   Battery                         -- battery %, low-battery, charging
  *   OccupancySensor "Food Low"      -- occupied = food is low
  *   OccupancySensor "Dispenser"     -- occupied = grain outlet jammed
@@ -83,6 +87,14 @@ export class GranarySmartFeederAccessory {
         : ALL_GRANARY_SERVICES,
     );
 
+    // Build a display prefix from the bound pet name, falling back to
+    // the device name. This makes tiles in the Home app read naturally:
+    //   "Feed Mochi"  /  "Mochi Food Low"  /  "Mochi Desiccant"
+    // instead of:
+    //   "Kitchen Feeder Feed Now"  /  "Kitchen Feeder Food Low"
+    const petName = this.device.primaryPetName;
+    const prefix = petName ?? device.name;
+
     // ---- AccessoryInformation ----
     this.accessory
       .getService(Service.AccessoryInformation)!
@@ -95,7 +107,7 @@ export class GranarySmartFeederAccessory {
     this.batteryService =
       this.accessory.getServiceById(Service.Battery, 'battery')
       ?? this.accessory.getService(Service.Battery)
-      ?? this.accessory.addService(Service.Battery, `${device.name} Battery`, 'battery');
+      ?? this.accessory.addService(Service.Battery, `${prefix} Battery`, 'battery');
     this.batteryService
       .getCharacteristic(Characteristic.BatteryLevel)
       .onGet(() => this.device.batteryPercent);
@@ -110,7 +122,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('foodLow')) {
       this.foodLowService =
         this.accessory.getServiceById(Service.OccupancySensor, 'food-low')
-        ?? this.accessory.addService(Service.OccupancySensor, `${device.name} Food Low`, 'food-low');
+        ?? this.accessory.addService(Service.OccupancySensor, `${prefix} Food Low`, 'food-low');
       this.foodLowService
         .getCharacteristic(Characteristic.OccupancyDetected)
         .onGet(() =>
@@ -129,7 +141,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('dispenser')) {
       this.dispenserService =
         this.accessory.getServiceById(Service.OccupancySensor, 'dispenser-problem')
-        ?? this.accessory.addService(Service.OccupancySensor, `${device.name} Dispenser`, 'dispenser-problem');
+        ?? this.accessory.addService(Service.OccupancySensor, `${prefix} Feeder Jam`, 'dispenser-problem');
       this.dispenserService
         .getCharacteristic(Characteristic.OccupancyDetected)
         .onGet(() =>
@@ -148,7 +160,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('desiccantMaintenance')) {
       this.desiccantMaintenanceService =
         this.accessory.getServiceById(Service.FilterMaintenance, 'desiccant')
-        ?? this.accessory.addService(Service.FilterMaintenance, `${device.name} Desiccant`, 'desiccant');
+        ?? this.accessory.addService(Service.FilterMaintenance, `${prefix} Desiccant`, 'desiccant');
       this.desiccantMaintenanceService
         .getCharacteristic(Characteristic.FilterChangeIndication)
         .onGet(() => this.computeDesiccantChangeIndication());
@@ -163,7 +175,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('recentFeed')) {
       this.recentFeedService =
         this.accessory.getServiceById(Service.ContactSensor, 'recent-feed')
-        ?? this.accessory.addService(Service.ContactSensor, `${device.name} Recent Feed`, 'recent-feed');
+        ?? this.accessory.addService(Service.ContactSensor, `${prefix} Last Fed`, 'recent-feed');
       this.recentFeedService
         .getCharacteristic(Characteristic.ContactSensorState)
         .onGet(() => Characteristic.ContactSensorState.CONTACT_DETECTED);
@@ -174,9 +186,11 @@ export class GranarySmartFeederAccessory {
 
     // ---- Feed Now (momentary) ----
     if (this.isEnabled('feedNow')) {
+      // Use "Feed <pet>" when a pet is bound, otherwise "<device> Feed Now"
+      const feedLabel = petName ? `Feed ${petName}` : `${prefix} Feed Now`;
       this.feedNowService =
         this.accessory.getServiceById(Service.Switch, 'feed-now')
-        ?? this.accessory.addService(Service.Switch, `${device.name} Feed Now`, 'feed-now');
+        ?? this.accessory.addService(Service.Switch, feedLabel, 'feed-now');
       this.feedNowService
         .getCharacteristic(Characteristic.On)
         .onGet(() => false)
@@ -189,7 +203,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('feedingSchedule')) {
       this.feedingPlanService =
         this.accessory.getServiceById(Service.Switch, 'feeding-plan')
-        ?? this.accessory.addService(Service.Switch, `${device.name} Feeding Schedule`, 'feeding-plan');
+        ?? this.accessory.addService(Service.Switch, `${prefix} Schedule`, 'feeding-plan');
       this.feedingPlanService
         .getCharacteristic(Characteristic.On)
         .onGet(() => this.device.feedingPlanEnabled)
@@ -203,7 +217,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('indicator')) {
       this.indicatorService =
         this.accessory.getServiceById(Service.Switch, 'indicator')
-        ?? this.accessory.addService(Service.Switch, `${device.name} Indicator`, 'indicator');
+        ?? this.accessory.addService(Service.Switch, `${prefix} Indicator`, 'indicator');
       this.indicatorService
         .getCharacteristic(Characteristic.On)
         .onGet(() => this.device.indicatorLightOn)
@@ -217,7 +231,7 @@ export class GranarySmartFeederAccessory {
     if (this.isEnabled('childLock')) {
       this.childLockService =
         this.accessory.getServiceById(Service.Switch, 'child-lock')
-        ?? this.accessory.addService(Service.Switch, `${device.name} Child Lock`, 'child-lock');
+        ?? this.accessory.addService(Service.Switch, `${prefix} Child Lock`, 'child-lock');
       this.childLockService
         .getCharacteristic(Characteristic.On)
         .onGet(() => this.device.childLockOn)
@@ -227,17 +241,41 @@ export class GranarySmartFeederAccessory {
       this.removeStaleService(Service.Switch, 'child-lock');
     }
 
-    // ---- Reset Desiccant (momentary) ----
+    // ---- Replace Desiccant (momentary) ----
     if (this.isEnabled('resetDesiccant')) {
       this.desiccantResetService =
         this.accessory.getServiceById(Service.Switch, 'desiccant-reset')
-        ?? this.accessory.addService(Service.Switch, `${device.name} Reset Desiccant`, 'desiccant-reset');
+        ?? this.accessory.addService(Service.Switch, `${prefix} Replace Desiccant`, 'desiccant-reset');
       this.desiccantResetService
         .getCharacteristic(Characteristic.On)
         .onGet(() => false)
         .onSet(async (value: CharacteristicValue) => this.handleDesiccantReset(Boolean(value)));
     } else {
       this.removeStaleService(Service.Switch, 'desiccant-reset');
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Lifecycle
+  // ------------------------------------------------------------------
+
+  /**
+   * Clear all outstanding timers. Called by the platform when this
+   * accessory is being removed (device unshared / pruned) so that
+   * timer callbacks don't fire against stale service references.
+   */
+  destroy(): void {
+    if (this.feedResetTimer) {
+      clearTimeout(this.feedResetTimer);
+      this.feedResetTimer = null;
+    }
+    if (this.desiccantResetTimer) {
+      clearTimeout(this.desiccantResetTimer);
+      this.desiccantResetTimer = null;
+    }
+    if (this.recentFeedClearTimer) {
+      clearTimeout(this.recentFeedClearTimer);
+      this.recentFeedClearTimer = null;
     }
   }
 
