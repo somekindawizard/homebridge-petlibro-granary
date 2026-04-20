@@ -2,7 +2,7 @@
   "pluginAlias": "PetLibro",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "Homebridge plugin for PETLIBRO smart pet devices.\n\nBefore setup, review the [Account Management](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Account-Management) and [Password Limitations](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Password-Limitation) wiki pages — only one session can be logged in at a time, so consider creating a dedicated PETLIBRO account for Homebridge and sharing your devices to it.",
+  "headerDisplay": "Homebridge plugin for PETLIBRO smart pet devices.\n\n**Important:** PETLIBRO only allows one session per account. If you keep the PETLIBRO mobile app signed in alongside Homebridge, the plugin will be silently logged out (and vice versa). The recommended setup is to **create a dedicated PETLIBRO account just for Homebridge** and share your devices to it from your primary account.\n\nReview [Account Management](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Account-Management) and [Password Limitations](https://github.com/jjjonesjr33/petlibro/wiki/PetLibro-Password-Limitation) for caveats.",
   "footerDisplay": "For support, see the [GitHub issues](https://github.com/somekindawizard/homebridge-petlibro-granary/issues).",
   "schema": {
     "type": "object",
@@ -17,13 +17,14 @@
         "title": "PETLIBRO Account Email",
         "type": "string",
         "format": "email",
-        "required": true
+        "required": true,
+        "description": "Email address used to log in to PETLIBRO. Strongly recommended to be a dedicated account, not your primary one."
       },
       "password": {
         "title": "PETLIBRO Account Password",
         "type": "string",
         "required": true,
-        "description": "Your account password. It will be MD5-hashed before being sent to the API."
+        "description": "Stored in plaintext in your Homebridge config. The plugin MD5-hashes it before sending to the API, but the original is needed to log in. Use a unique password for this account."
       },
       "region": {
         "title": "Region",
@@ -40,7 +41,7 @@
         "default": 60,
         "minimum": 30,
         "maximum": 600,
-        "description": "How often to poll the PETLIBRO API for device state. Lower values increase responsiveness at the cost of more API calls."
+        "description": "Fast-tier polling cadence for live state (food level, online, etc.). Slow-tier endpoints (feeding plan, OTA, attribute settings) refresh every 5 minutes regardless. After any user action, polling temporarily speeds up to 15s for 2 minutes."
       },
       "manualFeedPortions": {
         "title": "Manual Feed Portions",
@@ -49,6 +50,14 @@
         "minimum": 1,
         "maximum": 48,
         "description": "Number of portions to dispense when the Manual Feed switch is triggered. 1 portion ≈ 1/12 cup on standard feeders."
+      },
+      "desiccantCycleDays": {
+        "title": "Desiccant Cycle (days)",
+        "type": "integer",
+        "default": 30,
+        "minimum": 7,
+        "maximum": 180,
+        "description": "How many days a fresh desiccant pack lasts. Used to compute the FilterLifeLevel percentage shown in the Eve app and similar."
       },
       "debug": {
         "title": "Debug Logging",

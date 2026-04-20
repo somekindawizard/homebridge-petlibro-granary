@@ -10,30 +10,38 @@ import {
 import { promises as fs } from 'fs';
 import * as path from 'path';
 
-import { PetLibroAPI } from './api';
+import { PetLibroAPI, PetLibroAuthFatalError } from './api';
 import { GranarySmartFeederAccessory } from './accessories/granarySmartFeederAccessory';
 import { createDevice, Device, GranarySmartFeeder } from './devices';
 import {
   DEFAULT_POLL_INTERVAL_SECONDS,
+  FAST_POLL_DURATION_MS,
+  FAST_POLL_INTERVAL_SECONDS,
   PLATFORM_NAME,
   PLUGIN_NAME,
   PetLibroPluginConfig,
+  PetLibroRegion,
+  POLL_JITTER_RATIO,
+  SLOW_TIER_POLL_INTERVAL_SECONDS,
 } from './settings';
+import { decryptToken, encryptToken } from './util/tokenCrypto';
+import { jitter } from './util/jitter';
 
-type AccessoryHandler = GranarySmartFeederAccessory; // expand union as device types are added
+type AccessoryHandler = GranarySmartFeederAccessory;
 
 /**
  * PETLIBRO dynamic platform plugin.
  *
- * On launch:
- *   1. Read config.json (email, password, region, polling cadence).
- *   2. Restore a cached auth token from disk if available (so we don't
- *      re-login on every Homebridge restart).
- *   3. Log into PETLIBRO, fetch the device list, and create Device objects
- *      for each supported product.
- *   4. Register a PlatformAccessory + HomeKit service layer for each.
- *   5. Start a polling loop on pollIntervalSeconds (default 60s), matching
- *      the HA integration's UPDATE_INTERVAL_SECONDS.
+ * Polling architecture:
+ *   - Fast tier (every pollIntervalSeconds, default 60s):
+ *       device.refresh('light') — only realInfo, grainStatus, workRecord.
+ *   - Slow tier (every SLOW_TIER_POLL_INTERVAL_SECONDS, default 5min):
+ *       device.refresh('full') — adds attribute settings, OTA, plan list.
+ *   - Adaptive boost: after a user-initiated mutation we drop to
+ *       FAST_POLL_INTERVAL_SECONDS (15s) for FAST_POLL_DURATION_MS (2min)
+ *       so the UI reflects the new state quickly.
+ *   - Each tick has ±POLL_JITTER_RATIO randomization so multiple
+ *       Homebridge instances don't all hit PETLIBRO at the same instant.
  */
 export class PetLibroPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -43,8 +51,11 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
   private readonly handlers = new Map<string, AccessoryHandler>();
   private readonly devices = new Map<string, Device>();
   private apiClient: PetLibroAPI | null = null;
-  private pollTimer: NodeJS.Timeout | null = null;
+  private fastPollTimer: NodeJS.Timeout | null = null;
+  private slowPollTimer: NodeJS.Timeout | null = null;
+  private fastBoostUntil = 0;
   private readonly tokenPath: string;
+  private shuttingDown = false;
 
   constructor(
     public readonly log: Logger,
@@ -53,9 +64,6 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
-    // Sanitize PLUGIN_NAME for use as a filename — scoped package names
-    // contain '/' (e.g. '@prismwizard/homebridge-petlibro') which the
-    // filesystem would interpret as a directory separator.
     const safeName = PLUGIN_NAME.replace(/[\\/]/g, '-').replace(/^@/, '');
     this.tokenPath = path.join(this.api.user.storagePath(), `${safeName}-token.json`);
 
@@ -68,9 +76,20 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
     });
 
     this.api.on('shutdown', () => {
-      if (this.pollTimer) {
-        clearInterval(this.pollTimer);
-        this.pollTimer = null;
+      this.shuttingDown = true;
+      if (this.fastPollTimer) clearInterval(this.fastPollTimer);
+      if (this.slowPollTimer) clearInterval(this.slowPollTimer);
+      this.fastPollTimer = null;
+      this.slowPollTimer = null;
+      // Best-effort logout to release the single-session slot. We bound
+      // this to 3s so we don't hang Homebridge shutdown if PETLIBRO is
+      // unresponsive — the session will eventually time out server-side.
+      const client = this.apiClient;
+      if (client) {
+        Promise.race([
+          client.logout(),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ]).catch(() => undefined);
       }
     });
   }
@@ -92,8 +111,7 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
     this.apiClient = new PetLibroAPI(
       this.config.email!,
       this.config.password!,
-      this.config.region ?? 'US',
-      // Homebridge doesn't expose HA's time_zone; use the OS default.
+      (this.config.region ?? 'US') as PetLibroRegion,
       Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago',
       this.log,
       initialToken,
@@ -118,12 +136,6 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
         }
         this.devices.set(device.serial, device);
 
-        // Run the initial refresh so the accessory comes up with real state
-        // rather than defaults. If the first refresh fails (e.g. transient
-        // network error), we still register the accessory — the polling loop
-        // will retry every `pollIntervalSeconds` and fill in the real values.
-        // This is preferred over bailing because a bailed accessory would
-        // disappear from HomeKit on every restart during an outage.
         const ok = await device.refreshSafely();
         if (!ok) {
           this.log.warn(
@@ -137,6 +149,13 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
       this.pruneOrphans();
       this.startPolling();
     } catch (err) {
+      if (err instanceof PetLibroAuthFatalError) {
+        this.log.error(
+          'PETLIBRO authentication failed permanently. Verify your email/password ' +
+          'in config.json, then restart Homebridge. The plugin will stop polling.',
+        );
+        return;
+      }
       this.log.error('Discovery/login failed:', err);
     }
   }
@@ -169,8 +188,6 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
       this.api.updatePlatformAccessories([accessory]);
     }
 
-    // Dispatch on concrete device type. When more device classes are ported,
-    // extend this switch rather than smearing HomeKit logic into device.ts.
     if (device instanceof GranarySmartFeeder) {
       const handler = new GranarySmartFeederAccessory(this, accessory, device);
       this.handlers.set(device.serial, handler);
@@ -201,20 +218,67 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
   // ------------------------------------------------------------------
 
   private startPolling(): void {
-    const intervalSec = this.config.pollIntervalSeconds ?? DEFAULT_POLL_INTERVAL_SECONDS;
-    this.log.debug(`Starting polling loop every ${intervalSec}s.`);
-    this.pollTimer = setInterval(() => {
-      this.pollAll().catch((err) => this.log.error('Polling cycle failed:', err));
-    }, intervalSec * 1000);
+    const fastSec = this.config.pollIntervalSeconds ?? DEFAULT_POLL_INTERVAL_SECONDS;
+    this.log.debug(
+      `Starting polling: fast tier every ~${fastSec}s, slow tier every ` +
+      `~${SLOW_TIER_POLL_INTERVAL_SECONDS}s, fast-boost ${FAST_POLL_INTERVAL_SECONDS}s ` +
+      `for ${FAST_POLL_DURATION_MS}ms after mutations.`,
+    );
+
+    const scheduleFast = () => {
+      const baseSec = Date.now() < this.fastBoostUntil
+        ? FAST_POLL_INTERVAL_SECONDS
+        : fastSec;
+      const ms = jitter(baseSec * 1000, POLL_JITTER_RATIO);
+      this.fastPollTimer = setTimeout(async () => {
+        if (this.shuttingDown) return;
+        try {
+          await this.pollAll('light');
+        } catch (err) {
+          this.log.error('Fast-tier poll failed:', err);
+        }
+        scheduleFast();
+      }, ms);
+    };
+
+    const scheduleSlow = () => {
+      const ms = jitter(SLOW_TIER_POLL_INTERVAL_SECONDS * 1000, POLL_JITTER_RATIO);
+      this.slowPollTimer = setTimeout(async () => {
+        if (this.shuttingDown) return;
+        try {
+          await this.pollAll('full');
+        } catch (err) {
+          this.log.error('Slow-tier poll failed:', err);
+        }
+        scheduleSlow();
+      }, ms);
+    };
+
+    scheduleFast();
+    scheduleSlow();
   }
 
-  private async pollAll(): Promise<void> {
+  /**
+   * Boost polling cadence after a user-initiated mutation. Called by the
+   * accessory layer; the next ~2 minutes of fast-tier polls run at 15s.
+   */
+  boostPolling(): void {
+    this.fastBoostUntil = Date.now() + FAST_POLL_DURATION_MS;
+  }
+
+  private async pollAll(mode: 'full' | 'light'): Promise<void> {
+    if (this.apiClient?.isCredentialsRejected()) {
+      // Don't keep poking the API — the credentials have been rejected.
+      return;
+    }
     for (const [serial, device] of this.devices) {
       try {
-        await device.refresh();
+        if (device instanceof GranarySmartFeeder) {
+          await device.refresh(mode);
+        } else {
+          await device.refresh();
+        }
       } catch (err) {
-        // Device.refresh() already logs internally via logRefreshError;
-        // catching here is belt-and-suspenders in case a subclass throws.
         this.log.debug(`Poll refresh threw for ${device.name}:`, err);
         continue;
       }
@@ -227,17 +291,19 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
   }
 
   // ------------------------------------------------------------------
-  // Token persistence
+  // Token persistence (encrypted at rest)
   // ------------------------------------------------------------------
 
   private async loadStoredToken(): Promise<string | null> {
     try {
       const data = await fs.readFile(this.tokenPath, 'utf8');
-      const parsed = JSON.parse(data) as { email?: string; token?: string };
-      if (parsed.email === this.config.email && parsed.token) {
+      const decrypted = decryptToken(data, this.config.email ?? '');
+      if (decrypted) {
         this.log.debug('Loaded cached PETLIBRO token from disk.');
-        return parsed.token;
+        return decrypted;
       }
+      // Legacy plaintext file or fingerprint mismatch — drop it.
+      this.log.debug('Discarding stale/invalid cached token; will re-login.');
     } catch {
       // No token cached yet — normal on first run.
     }
@@ -246,11 +312,11 @@ export class PetLibroPlatform implements DynamicPlatformPlugin {
 
   private async persistToken(token: string): Promise<void> {
     try {
-      await fs.writeFile(
-        this.tokenPath,
-        JSON.stringify({ email: this.config.email, token }),
-        { encoding: 'utf8', mode: 0o600 },
-      );
+      const payload = encryptToken(token, this.config.email ?? '');
+      await fs.writeFile(this.tokenPath, payload, {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
     } catch (err) {
       this.log.warn('Failed to persist PETLIBRO token:', err);
     }

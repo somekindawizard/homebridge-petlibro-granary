@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.0 — 2026-04-19
+
+A reliability + security pass. No HomeKit-visible behavior changes for happy
+paths; substantial improvements for failure modes, rapid input, and security.
+
+### Added
+
+- **Per-device mutation lock.** Rapid Switch toggles in Home.app no longer race against each other — mutations serialize per device and run in submission order.
+- **Optimistic local updates.** Toggling Child Lock / Indicator / Feeding Schedule flips the local state immediately. A single Switch tap now costs ~1 API call instead of ~8 (previously each toggle triggered a full 7-endpoint refresh).
+- **Adaptive polling.** After any user-initiated mutation, fast-tier polling drops from 60s to 15s for 2 minutes so the UI catches up quickly. Returns to baseline automatically.
+- **Tiered polling.** Fast tier (every `pollIntervalSeconds`) only fetches realInfo / grainStatus / workRecord. Slow tier (every 5 min) handles attribute settings, OTA, feeding plan list, bound pets. Cuts steady-state API load by ~60%.
+- **Polling jitter.** Each tick has ±10% randomization so multiple Homebridge instances don't synchronize their polls against PETLIBRO's servers.
+- **Encrypted token at rest.** The cached PETLIBRO session token is now encrypted with AES-256-GCM keyed off machine-stable identifiers (hostname, primary MAC). Defense-in-depth against backup-snapshot leaks.
+- **Graceful logout on shutdown.** The plugin now logs out of PETLIBRO when Homebridge stops, freeing the single-session-per-account slot. Bounded to 3s so it never hangs shutdown.
+- **Login backoff with circuit breaker.** Failed logins now back off exponentially (5s → 5min, ±20% jitter). After 6 consecutive failures the breaker trips and the plugin stops trying until restart — no more re-login storm hammering PETLIBRO on a typo.
+- **Bad-credentials detection.** When PETLIBRO returns codes 1003/1004/1005 (account not found / wrong password / locked), the plugin marks credentials permanently rejected and stops polling instead of looping. Logs a clear actionable error.
+- **Immediate Recent Feed pulse on local mutations.** When the plugin initiates a manual feed, the Recent Feed contact sensor pulses *immediately* rather than waiting up to a minute for the workRecord poll to surface the new entry. Polling-detected feeds (e.g. scheduled or app-initiated) still fire on poll.
+- **Configurable desiccant cycle.** New `desiccantCycleDays` config (default 30) controls the FilterLifeLevel calculation.
+- **Vitest test suite** covering Backoff, KeyedMutex, jitter / debounce / sleep, token crypto round-trip, and all GranarySmartFeeder state parsers.
+- **GitHub Actions CI** running lint + tests + build against Node 20 / 22 / 24 on every PR.
+- **Stricter ESLint** with `no-floating-promises` and type-aware rules.
+- **Stricter tsconfig** (`noImplicitOverride`, `noFallthroughCasesInSwitch`, `noImplicitReturns`, `useUnknownInCatchVariables`).
+
+### Changed
+
+- **`Promise.allSettled` everywhere in refresh paths.** A single failing endpoint no longer wipes all device state for the polling cycle; whatever succeeded is merged in.
+- **Sensitive fields stripped from debug logs.** Request bodies are now sanitized before being logged at HTTP-error debug level — `password` and `token` fields are replaced with `<redacted>`.
+- **Concurrent login dedup.** Multiple in-flight requests that hit a 1009 simultaneously now share a single in-flight login promise instead of stampeding the auth endpoint.
+- **`PetLibroRegion` is now a typed enum** so future EU/AU shards are a one-line addition.
+- **Region selection moved through typed config** (no behavior change for US users).
+- **Magic numbers consolidated** in `settings.ts` (low-battery threshold, momentary-switch reset window, recent-feed pulse duration, etc.).
+- **Engines:** dropped Node 18 (EOL April 2025), keeping `^20.9.0 || ^22 || ^24`.
+
+### Removed
+
+- The redundant inline refresh after every Switch toggle. Reconciliation now happens via the platform's adaptive fast-poll boost.
+
 ## 0.3.4 — 2026-04-19
 
 ### Fixed
