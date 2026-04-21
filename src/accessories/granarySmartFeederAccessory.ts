@@ -249,6 +249,21 @@ export class GranarySmartFeederAccessory {
     }
   }
 
+  // ------------------------------------------------------------------
+  // Lifecycle
+  // ------------------------------------------------------------------
+
+  /**
+   * Clear outstanding timers so nothing fires after the platform shuts
+   * down or removes an orphaned accessory. Called by the platform on
+   * shutdown and during stale-accessory cleanup.
+   */
+  destroy(): void {
+    if (this.feedResetTimer) { clearTimeout(this.feedResetTimer); this.feedResetTimer = null; }
+    if (this.desiccantResetTimer) { clearTimeout(this.desiccantResetTimer); this.desiccantResetTimer = null; }
+    if (this.recentFeedClearTimer) { clearTimeout(this.recentFeedClearTimer); this.recentFeedClearTimer = null; }
+  }
+
   /** Called by the platform after each polling cycle to push fresh state. */
   refreshCharacteristics(): void {
     const Characteristic = this.platform.api.hap.Characteristic;
