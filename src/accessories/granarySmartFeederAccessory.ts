@@ -404,8 +404,9 @@ export class GranarySmartFeederAccessory {
 
   computeDesiccantLifeLevel(): number {
     const days = this.device.remainingDesiccantDays ?? 0;
-    const cycle = this.platform.config.desiccantCycleDays ?? DESICCANT_DEFAULT_DAYS;
-    const pct = Math.round((days / cycle) * 100);
+    const cycle = Number(this.platform.config.desiccantCycleDays ?? DESICCANT_DEFAULT_DAYS);
+    const safeCycle = Number.isFinite(cycle) && cycle > 0 ? cycle : DESICCANT_DEFAULT_DAYS;
+    const pct = Math.round((days / safeCycle) * 100);
     return Math.max(0, Math.min(100, pct));
   }
 
