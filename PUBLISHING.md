@@ -24,7 +24,7 @@ below sync everything up, fix CI, install locally for testing, then publish.
 1. Sync your local repo with the remote `main`
 2. Regenerate the lockfile and push it (fixes CI)
 3. Wait for CI to go green
-4. Install locally on Homebridge for a quick smoke test
+4. Install locally on Homebridge for a smoke test
 5. Tag and publish to npm
 
 ---
@@ -81,48 +81,144 @@ https://github.com/somekindawizard/homebridge-petlibro-granary/actions
 Before publishing to npm, install the plugin from your local build to
 make sure it actually works on your feeder.
 
+### What `npm link` does
+
+It creates a symlink (a shortcut) so that Homebridge loads your local
+`dist/` folder instead of the version it downloaded from npm. Think of
+it like temporarily pointing Homebridge at your local code instead of
+the store-bought version.
+
+**It does not:**
+- Modify your Homebridge config
+- Delete your existing accessories or automations
+- Touch your Home.app rooms/scenes/names
+- Install anything permanently
+
+**It does:**
+- Replace the plugin's code with your local build (via symlink)
+- Survive until you explicitly unlink or reinstall from npm
+
+### 3a. Build your local code
+
 ```bash
 cd ~/homebridge-petlibro-granary
-npm run build                # make sure dist/ is fresh
-sudo npm link                # creates a global symlink to this folder
+npm run build
 ```
 
-Then in your Homebridge installation directory:
+This compiles your TypeScript into `dist/`. The symlink will point here.
+
+### 3b. Create the global symlink
 
 ```bash
+sudo npm link
+```
+
+This registers your local folder globally so any project can reference
+it by package name. Nothing happens to Homebridge yet.
+
+### 3c. Find your Homebridge plugin directory
+
+If you're running `hb-service` (the standard Homebridge UI setup), the
+plugin directory is usually `/usr/local/lib/node_modules/`. You can
+check:
+
+```bash
+npm root -g
+# Typical output: /usr/local/lib/node_modules
+```
+
+Verify the current install exists:
+
+```bash
+ls /usr/local/lib/node_modules/ | grep petlibro
+```
+
+If you see `homebridge-petlibro-granary` there, that's the installed
+copy from npm that will be replaced by the symlink.
+
+### 3d. Link it into Homebridge
+
+```bash
+cd /usr/local/lib/node_modules    # or whatever npm root -g showed
 sudo npm link homebridge-petlibro-granary
 ```
 
-Restart Homebridge:
+This replaces the npm-installed copy with a symlink to your local build.
+You can verify it worked:
+
+```bash
+ls -la /usr/local/lib/node_modules/homebridge-petlibro-granary
+# Should show -> /Users/yourname/homebridge-petlibro-granary
+```
+
+### 3e. Restart Homebridge
 
 ```bash
 sudo hb-service restart
 ```
 
-### What to check
+### 3f. Check the Homebridge log
 
-- [ ] Plugin loads without errors in the Homebridge log
-- [ ] Feeder accessory appears in Home.app
-- [ ] Indicator shows as a **Lightbulb** (not a generic Switch)
-- [ ] Child Lock shows as a **Lock** (not a generic Switch)
-- [ ] Feeding Schedule is the **primary tile** (shown first)
-- [ ] Emoji prefixes appear in default service names
-- [ ] Feed Now switch works (dispenses food)
-- [ ] Reset Desiccant tile is **not** visible by default
-- [ ] No orphaned tiles from the old 0.4.0 Switch services
+Open the Homebridge web UI (usually `http://your-mac-mini:8581`) and
+watch the log. You're looking for:
 
-If anything is wrong, fix it locally, `npm run build` again, restart
-Homebridge, and retest. Homebridge picks up the linked build automatically.
+- Plugin loads with `[PetLibro]` log lines, no red errors
+- It logs in to the PETLIBRO API successfully
+- Your feeder is discovered and accessories are registered
+- You might see `Removed indicator service` and `Removed child-lock
+  service` lines. That's the legacy migration working correctly (it's
+  cleaning up the old 0.4.0 Switch services)
 
-### When done testing, unlink
+### 3g. Check Home.app
+
+Open Home.app on your phone. The feeder's tile group should look
+different from before:
+
+**Before (0.4.0):**
+- Indicator was a generic Switch toggle
+- Child Lock was a generic Switch toggle
+- All tiles had plain names like "Granary Indicator"
+
+**After (0.5.0):**
+- Indicator shows as a **lightbulb icon** (tap it, should toggle the LED)
+- Child Lock shows as a **lock icon** (tap it, should lock/unlock; try
+  saying "Hey Siri, lock the child lock")
+- Feeding Schedule should be the **first tile** shown
+- Names have emoji prefixes: 📅 Feeding Schedule, 💡 Indicator,
+  🔒 Child Lock, etc.
+- Reset Desiccant tile should be **gone** (hidden by default now)
+- No duplicate/orphaned tiles from the old Switch versions
+
+Try tapping a few things:
+
+- [ ] Toggle the indicator lightbulb on/off
+- [ ] Lock/unlock the child lock
+- [ ] Hit Feed Now (it will actually dispense food, so be ready)
+- [ ] Check that Food Low sensor and Desiccant filter show up
+- [ ] Verify no orphaned "Switch" tiles from the old version
+
+### 3h. If you need to make fixes
+
+If anything looks wrong, you can edit your local code, rebuild, and
+restart. The symlink means Homebridge always picks up whatever is in
+your `dist/` folder:
 
 ```bash
-cd ~/homebridge-petlibro-granary
+# edit code...
+npm run build
+sudo hb-service restart
+```
+
+No need to re-link. Just build and restart.
+
+### 3i. Unlink when done testing
+
+```bash
 sudo npm unlink homebridge-petlibro-granary -g
 ```
 
-Then reinstall the published version after Step 4 (Homebridge UI will
-handle this automatically once it sees the new version on npm).
+This removes the global symlink. After you publish in Step 4, Homebridge
+will go back to using the npm registry version on the next restart.
 
 ---
 
@@ -185,7 +281,10 @@ hour automatically.** Nothing else for you to do.
 | `npm test` | Runs the test suite (81 tests across 6 files) |
 | `npm run build` | Compiles TypeScript to JavaScript in `dist/` |
 | Push `package-lock.json` | CI can now run `npm ci` successfully |
-| `sudo npm link` | Symlinks your local build into Homebridge for testing |
+| `sudo npm link` | Registers your local build as a global package |
+| `sudo npm link homebridge-petlibro-granary` | Symlinks your local build into Homebridge's plugin directory |
+| `sudo hb-service restart` | Homebridge picks up the linked local code |
+| `sudo npm unlink homebridge-petlibro-granary -g` | Removes the symlink, Homebridge goes back to the npm version |
 | `git tag v0.5.0` | Creates the version tag |
 | `git push --follow-tags` | GitHub now shows v0.5.0 tag |
 | `npm publish` | **Tarball uploaded to npmjs.com, users can install** |
@@ -208,13 +307,15 @@ Lock Switch will need to be recreated against the new Lightbulb/Lock.
 
 ---
 
-## Mental model: Git vs npm
+## Mental model: Git vs npm vs npm link
 
 > **GitHub** = the factory (source code, issues, PRs, history)
 > **npm** = the store shelf (where Homebridge installs from)
+> **npm link** = a temporary shortcut from the store shelf to the factory
 >
 > Pushing to GitHub alone does NOT update Homebridge users. You MUST run
-> `npm publish` for users to get the new version.
+> `npm publish` for users to get the new version. `npm link` is only for
+> your local testing and is invisible to everyone else.
 
 ---
 
@@ -232,8 +333,13 @@ Lock Switch will need to be recreated against the new Lightbulb/Lock.
 | Pushed wrong version by accident | `npm unpublish homebridge-petlibro-granary@0.5.0` (only works within 72hr) |
 | `git push` asks for username/password | Username = your GitHub username. Password = your **PAT**, not your GitHub password |
 | `git tag v0.5.0` says "already exists" | Check `git log v0.5.0` to see if it's on the right commit. If so, skip to `git push --follow-tags`. |
-| Homebridge still shows old version after unlink | `sudo hb-service restart` to clear the module cache |
-| `npm link` permission denied | Use `sudo npm link` (Homebridge typically runs as root) |
+| Homebridge says plugin not found after link | Wrong directory. Run `npm root -g` to find the right global modules path, then link there. |
+| Home.app still shows old Switch tiles | Homebridge cached the old accessory. Remove the accessory from Homebridge UI (Accessories tab), restart, let it re-discover. |
+| Two copies of each tile | Old cached accessory plus new one. Same fix: remove stale accessories from Homebridge UI, restart. |
+| Code changes don't show up after link | Forgot to rebuild. Run `npm run build` then `sudo hb-service restart`. |
+| Homebridge still shows old version after unlink | Run `sudo hb-service restart` to clear the module cache. |
+| `npm link` permission denied | Use `sudo npm link` (Homebridge typically runs as root). |
+| Want to bail out of link entirely | `sudo npm unlink homebridge-petlibro-granary -g && sudo hb-service restart` puts everything back. |
 
 ---
 
@@ -258,16 +364,21 @@ git push
 ### After CI is green, test locally:
 
 ```bash
+cd ~/homebridge-petlibro-granary
+npm run build
 sudo npm link
-# (in Homebridge dir) sudo npm link homebridge-petlibro-granary
+cd /usr/local/lib/node_modules    # or whatever npm root -g shows
+sudo npm link homebridge-petlibro-granary
 sudo hb-service restart
-# test in Home.app, then:
+# test in Home.app (lightbulb, lock, emoji, no orphans)
+# when satisfied:
 sudo npm unlink homebridge-petlibro-granary -g
 ```
 
 ### Publish:
 
 ```bash
+cd ~/homebridge-petlibro-granary
 git tag v0.5.0
 git push --follow-tags
 npm publish
