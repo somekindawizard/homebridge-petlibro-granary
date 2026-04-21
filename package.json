@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge PETLIBRO Granary",
   "name": "homebridge-petlibro-granary",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Homebridge plugin for the PETLIBRO Granary Smart Feeder (PLAF103) and Granary Smart Camera Feeder (PLAF203). Ported from the jjjonesjr33/petlibro Home Assistant integration.",
   "license": "GPL-3.0-or-later",
   "author": {

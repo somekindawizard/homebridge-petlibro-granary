@@ -2,395 +2,465 @@ import {
   CharacteristicValue,
   PlatformAccessory,
   Service,
+  WithUUID,
 } from 'homebridge';
 
 import { GranarySmartFeeder } from '../devices';
 import { PetLibroPlatform } from '../platform';
 import {
-  ALL_GRANARY_SERVICES,
   DESICCANT_DEFAULT_DAYS,
-  GranaryServiceKey,
   LOW_BATTERY_PCT,
   MOMENTARY_SWITCH_RESET_MS,
-  POST_MUTATION_REFRESH_DEBOUNCE_MS,
+  PetLibroUiConfig,
   RECENT_FEED_PULSE_MS,
+  resolveUiConfig,
 } from '../settings';
-import { debounce } from '../util/jitter';
 
 /**
  * HomeKit accessory for the Granary Smart Feeder.
  *
- * Composes standard HomeKit services (no native feeder service exists).
- * Battery is always present. All other services are opt-in via the
- * enabledServices config array. When omitted, all services are enabled
- * for backward compatibility.
+ * Service mapping:
  *
- * Service labels use the bound pet name when available (e.g. "Feed Mochi"
- * instead of "Kitchen Feeder Feed Now"). Falls back to the device name
- * when no pet is bound or the fetch fails.
+ *   Battery                -- battery %, low-battery flag, charging state
+ *   OccupancySensor        -- Food Low (occupied = food is low)
+ *   OccupancySensor        -- Dispenser Jam (occupied = grain outlet blocked)
+ *   FilterMaintenance      -- Desiccant life remaining
+ *   ContactSensor          -- Recent Feed pulse (open = a feed just happened)
+ *   Switch                 -- Feed Now (momentary, auto-reverts)
+ *   Switch (Primary)       -- Feeding Schedule (stateful enable/disable)
+ *   Lightbulb              -- Indicator Light (renders as a light, not a generic toggle)
+ *   LockMechanism          -- Child Lock (renders as a lock, supports Siri lock verbs)
+ *   Switch                 -- Reset Desiccant (momentary, hidden by default)
+ *
+ * Each non-info service uses a stable subtype so Home.app keeps them
+ * distinct across renames. Service exposure is configurable via
+ * `ui.expose*` flags; orphaned services from previous versions or
+ * disabled-by-config services are pruned on startup.
  */
+
 export class GranarySmartFeederAccessory {
-  private readonly batteryService: Service;
-  private readonly foodLowService: Service | null = null;
-  private readonly dispenserService: Service | null = null;
-  private readonly desiccantMaintenanceService: Service | null = null;
-  private readonly recentFeedService: Service | null = null;
-  private readonly feedNowService: Service | null = null;
-  private readonly feedingPlanService: Service | null = null;
-  private readonly indicatorService: Service | null = null;
-  private readonly childLockService: Service | null = null;
-  private readonly desiccantResetService: Service | null = null;
+  private batteryService?: Service;
+  private foodLowService?: Service;
+  private dispenserService?: Service;
+  private desiccantMaintenanceService?: Service;
+  private recentFeedService?: Service;
+  private feedNowService?: Service;
+  private feedingPlanService?: Service;
+  private indicatorService?: Service;
+  private childLockService?: Service;
+  private desiccantResetService?: Service;
 
   private feedResetTimer: NodeJS.Timeout | null = null;
   private desiccantResetTimer: NodeJS.Timeout | null = null;
   private recentFeedClearTimer: NodeJS.Timeout | null = null;
-  private lastObservedFeedMs: number | null = null;
-  private readonly enabledServices: ReadonlySet<GranaryServiceKey>;
 
-  private readonly debouncedRefresh = debounce(() => {
-    try {
-      this.refreshCharacteristics();
-    } catch (err) {
-      this.platform.log.debug('debounced refresh failed:', err);
-    }
-  }, POST_MUTATION_REFRESH_DEBOUNCE_MS);
+  private lastObservedFeedMs: number | null = null;
+
+  private readonly ui: Required<PetLibroUiConfig>;
 
   constructor(
     private readonly platform: PetLibroPlatform,
     private readonly accessory: PlatformAccessory,
     private readonly device: GranarySmartFeeder,
   ) {
-    const Svc = this.platform.api.hap.Service;
-    const Chr = this.platform.api.hap.Characteristic;
+    const Service = this.platform.api.hap.Service;
+    const Characteristic = this.platform.api.hap.Characteristic;
 
-    const configured = this.platform.config.enabledServices;
-    this.enabledServices = new Set<GranaryServiceKey>(
-      Array.isArray(configured) && configured.length > 0
-        ? configured as GranaryServiceKey[]
-        : ALL_GRANARY_SERVICES,
-    );
+    this.ui = resolveUiConfig(this.platform.config.ui as PetLibroUiConfig | undefined);
 
-    const petName = this.device.primaryPetName;
-    const prefix = petName ?? device.name;
-
-    // ---- AccessoryInformation ----
+    // ---- AccessoryInformation (always present) ----
     this.accessory
-      .getService(Svc.AccessoryInformation)!
-      .setCharacteristic(Chr.Manufacturer, 'PETLIBRO')
-      .setCharacteristic(Chr.Model, device.model)
-      .setCharacteristic(Chr.SerialNumber, device.serial)
-      .setCharacteristic(Chr.FirmwareRevision, device.softwareVersion);
+      .getService(Service.AccessoryInformation)!
+      .setCharacteristic(Characteristic.Manufacturer, 'PETLIBRO')
+      .setCharacteristic(Characteristic.Model, device.model)
+      .setCharacteristic(Characteristic.SerialNumber, device.serial)
+      .setCharacteristic(Characteristic.FirmwareRevision, device.softwareVersion);
 
-    // ---- Battery (always present) ----
-    const batteryLabel = `${prefix} Battery`;
-    this.batteryService =
-      this.accessory.getServiceById(Svc.Battery, 'battery')
-      ?? this.accessory.getService(Svc.Battery)
-      ?? this.accessory.addService(Svc.Battery, batteryLabel, 'battery');
-    this.ensureDisplayName(this.batteryService, batteryLabel);
-    this.batteryService.getCharacteristic(Chr.BatteryLevel)
-      .onGet(() => this.device.batteryPercent);
-    this.batteryService.getCharacteristic(Chr.StatusLowBattery)
-      .onGet(() => this.computeLowBattery());
-    this.batteryService.getCharacteristic(Chr.ChargingState)
-      .onGet(() => this.computeChargingState());
+    // ---- Migrate legacy services from <0.5.0 ----
+    // Indicator was a Switch; it's now a Lightbulb with a different subtype.
+    // Child Lock was a Switch; it's now a LockMechanism with a different subtype.
+    // Removing the legacy services here means upgrades don't leave dead tiles.
+    this.removeServiceIfPresent(Service.Switch, 'indicator');
+    this.removeServiceIfPresent(Service.Switch, 'child-lock');
 
-    // ---- Food Low ----
-    if (this.isEnabled('foodLow')) {
-      const label = `${prefix} Food Low`;
-      this.foodLowService =
-        this.accessory.getServiceById(Svc.OccupancySensor, 'food-low')
-        ?? this.accessory.addService(Svc.OccupancySensor, label, 'food-low');
-      this.ensureDisplayName(this.foodLowService, label);
-      this.foodLowService.getCharacteristic(Chr.OccupancyDetected)
-        .onGet(() => this.device.foodLow
-          ? Chr.OccupancyDetected.OCCUPANCY_DETECTED
-          : Chr.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
-      this.foodLowService.getCharacteristic(Chr.StatusActive)
-        .onGet(() => this.device.online);
+    // ---- Battery ----
+    if (this.ui.exposeBattery) {
+      this.batteryService = this.accessory.getService(Service.Battery)
+        ?? this.accessory.addService(Service.Battery, this.label('Battery', '\ud83e\udeab'));
+      this.batteryService
+        .getCharacteristic(Characteristic.BatteryLevel)
+        .onGet(() => this.device.batteryPercent);
+      this.batteryService
+        .getCharacteristic(Characteristic.StatusLowBattery)
+        .onGet(() => this.computeLowBattery());
+      this.batteryService
+        .getCharacteristic(Characteristic.ChargingState)
+        .onGet(() => this.computeChargingState());
     } else {
-      this.removeStaleService(Svc.OccupancySensor, 'food-low');
+      this.removeServiceIfPresent(Service.Battery);
     }
 
-    // ---- Dispenser blockage ----
-    if (this.isEnabled('dispenser')) {
-      const label = `${prefix} Feeder Jam`;
-      this.dispenserService =
-        this.accessory.getServiceById(Svc.OccupancySensor, 'dispenser-problem')
-        ?? this.accessory.addService(Svc.OccupancySensor, label, 'dispenser-problem');
-      this.ensureDisplayName(this.dispenserService, label);
-      this.dispenserService.getCharacteristic(Chr.OccupancyDetected)
-        .onGet(() => this.device.foodDispenserProblem
-          ? Chr.OccupancyDetected.OCCUPANCY_DETECTED
-          : Chr.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
-      this.dispenserService.getCharacteristic(Chr.StatusActive)
+    // ---- Food Low (Occupancy Sensor) ----
+    if (this.ui.exposeFoodLow) {
+      this.foodLowService = this.accessory.getServiceById(Service.OccupancySensor, 'food-low')
+        ?? this.accessory.addService(Service.OccupancySensor, this.label('Food Low', '\ud83e\udd63'), 'food-low');
+      this.foodLowService
+        .getCharacteristic(Characteristic.OccupancyDetected)
+        .onGet(() => this.boolToOccupancy(this.device.foodLow));
+      this.foodLowService
+        .getCharacteristic(Characteristic.StatusActive)
         .onGet(() => this.device.online);
     } else {
-      this.removeStaleService(Svc.OccupancySensor, 'dispenser-problem');
+      this.removeServiceIfPresent(Service.OccupancySensor, 'food-low');
     }
 
-    // ---- Desiccant filter ----
-    if (this.isEnabled('desiccantMaintenance')) {
-      const label = `${prefix} Desiccant`;
-      this.desiccantMaintenanceService =
-        this.accessory.getServiceById(Svc.FilterMaintenance, 'desiccant')
-        ?? this.accessory.addService(Svc.FilterMaintenance, label, 'desiccant');
-      this.ensureDisplayName(this.desiccantMaintenanceService, label);
-      this.desiccantMaintenanceService.getCharacteristic(Chr.FilterChangeIndication)
+    // ---- Dispenser Jam (Occupancy Sensor) ----
+    if (this.ui.exposeDispenser) {
+      this.dispenserService = this.accessory.getServiceById(Service.OccupancySensor, 'dispenser-problem')
+        ?? this.accessory.addService(Service.OccupancySensor, this.label('Dispenser Jam', '\u26a0\ufe0f'), 'dispenser-problem');
+      this.dispenserService
+        .getCharacteristic(Characteristic.OccupancyDetected)
+        .onGet(() => this.boolToOccupancy(this.device.foodDispenserProblem));
+      this.dispenserService
+        .getCharacteristic(Characteristic.StatusActive)
+        .onGet(() => this.device.online);
+    } else {
+      this.removeServiceIfPresent(Service.OccupancySensor, 'dispenser-problem');
+    }
+
+    // ---- Desiccant (Filter Maintenance) ----
+    if (this.ui.exposeDesiccant) {
+      this.desiccantMaintenanceService = this.accessory.getServiceById(Service.FilterMaintenance, 'desiccant')
+        ?? this.accessory.addService(Service.FilterMaintenance, this.label('Desiccant', '\ud83e\uddc2'), 'desiccant');
+      this.desiccantMaintenanceService
+        .getCharacteristic(Characteristic.FilterChangeIndication)
         .onGet(() => this.computeDesiccantChangeIndication());
-      this.desiccantMaintenanceService.getCharacteristic(Chr.FilterLifeLevel)
+      this.desiccantMaintenanceService
+        .getCharacteristic(Characteristic.FilterLifeLevel)
         .onGet(() => this.computeDesiccantLifeLevel());
     } else {
-      this.removeStaleService(Svc.FilterMaintenance, 'desiccant');
+      this.removeServiceIfPresent(Service.FilterMaintenance, 'desiccant');
     }
 
-    // ---- Last Fed pulse ----
-    if (this.isEnabled('recentFeed')) {
-      const label = `${prefix} Last Fed`;
-      this.recentFeedService =
-        this.accessory.getServiceById(Svc.ContactSensor, 'recent-feed')
-        ?? this.accessory.addService(Svc.ContactSensor, label, 'recent-feed');
-      this.ensureDisplayName(this.recentFeedService, label);
-      this.recentFeedService.getCharacteristic(Chr.ContactSensorState)
-        .onGet(() => Chr.ContactSensorState.CONTACT_DETECTED);
+    // ---- Recent Feed (Contact Sensor) ----
+    if (this.ui.exposeRecentFeed) {
+      this.recentFeedService = this.accessory.getServiceById(Service.ContactSensor, 'recent-feed')
+        ?? this.accessory.addService(Service.ContactSensor, this.label('Recent Feed', '\ud83d\udc3e'), 'recent-feed');
+      this.recentFeedService
+        .getCharacteristic(Characteristic.ContactSensorState)
+        .onGet(() => Characteristic.ContactSensorState.CONTACT_DETECTED);
       this.lastObservedFeedMs = this.device.lastFeedTimeMs;
     } else {
-      this.removeStaleService(Svc.ContactSensor, 'recent-feed');
+      this.removeServiceIfPresent(Service.ContactSensor, 'recent-feed');
     }
 
-    // ---- Feed Now (momentary) ----
-    if (this.isEnabled('feedNow')) {
-      const label = petName ? `Feed ${petName}` : `${prefix} Feed Now`;
-      this.feedNowService =
-        this.accessory.getServiceById(Svc.Switch, 'feed-now')
-        ?? this.accessory.addService(Svc.Switch, label, 'feed-now');
-      this.ensureDisplayName(this.feedNowService, label);
-      this.feedNowService.getCharacteristic(Chr.On)
+    // ---- Feed Now (momentary Switch) ----
+    if (this.ui.exposeFeedNow) {
+      this.feedNowService = this.accessory.getServiceById(Service.Switch, 'feed-now')
+        ?? this.accessory.addService(Service.Switch, this.label('Feed Now', '\ud83c\udf7d\ufe0f'), 'feed-now');
+      this.feedNowService
+        .getCharacteristic(Characteristic.On)
         .onGet(() => false)
-        .onSet(async (v: CharacteristicValue) => this.handleFeedNow(Boolean(v)));
+        .onSet((value: CharacteristicValue) => {
+          void this.handleFeedNow(Boolean(value));
+        });
     } else {
-      this.removeStaleService(Svc.Switch, 'feed-now');
+      this.removeServiceIfPresent(Service.Switch, 'feed-now');
     }
 
-    // ---- Feeding Schedule ----
-    if (this.isEnabled('feedingSchedule')) {
-      const label = `${prefix} Schedule`;
-      this.feedingPlanService =
-        this.accessory.getServiceById(Svc.Switch, 'feeding-plan')
-        ?? this.accessory.addService(Svc.Switch, label, 'feeding-plan');
-      this.ensureDisplayName(this.feedingPlanService, label);
-      this.feedingPlanService.getCharacteristic(Chr.On)
+    // ---- Feeding Schedule (Switch, marked Primary) ----
+    if (this.ui.exposeFeedingSchedule) {
+      this.feedingPlanService = this.accessory.getServiceById(Service.Switch, 'feeding-plan')
+        ?? this.accessory.addService(Service.Switch, this.label('Feeding Schedule', '\ud83d\udcc5'), 'feeding-plan');
+      this.feedingPlanService.setPrimaryService(true);
+      this.feedingPlanService
+        .getCharacteristic(Characteristic.On)
         .onGet(() => this.device.feedingPlanEnabled)
-        .onSet((v: CharacteristicValue) =>
-          this.runMutation('Feeding Schedule', () => this.device.setFeedingPlan(Boolean(v))));
+        .onSet((value: CharacteristicValue) => {
+          void this.runMutation(
+            'Feeding Schedule',
+            () => this.device.setFeedingPlan(Boolean(value)),
+          );
+        });
     } else {
-      this.removeStaleService(Svc.Switch, 'feeding-plan');
+      this.removeServiceIfPresent(Service.Switch, 'feeding-plan');
     }
 
-    // ---- Indicator ----
-    if (this.isEnabled('indicator')) {
-      const label = `${prefix} Indicator`;
-      this.indicatorService =
-        this.accessory.getServiceById(Svc.Switch, 'indicator')
-        ?? this.accessory.addService(Svc.Switch, label, 'indicator');
-      this.ensureDisplayName(this.indicatorService, label);
-      this.indicatorService.getCharacteristic(Chr.On)
+    // ---- Indicator Light (Lightbulb -- semantic upgrade from Switch) ----
+    if (this.ui.exposeIndicator) {
+      this.indicatorService = this.accessory.getServiceById(Service.Lightbulb, 'indicator-light')
+        ?? this.accessory.addService(Service.Lightbulb, this.label('Indicator', '\ud83d\udca1'), 'indicator-light');
+      this.indicatorService
+        .getCharacteristic(Characteristic.On)
         .onGet(() => this.device.indicatorLightOn)
-        .onSet((v: CharacteristicValue) =>
-          this.runMutation('Indicator', () => this.device.setIndicatorLight(Boolean(v))));
+        .onSet((value: CharacteristicValue) => {
+          void this.runMutation(
+            'Indicator',
+            () => this.device.setIndicatorLight(Boolean(value)),
+          );
+        });
     } else {
-      this.removeStaleService(Svc.Switch, 'indicator');
+      this.removeServiceIfPresent(Service.Lightbulb, 'indicator-light');
     }
 
-    // ---- Child Lock ----
-    if (this.isEnabled('childLock')) {
-      const label = `${prefix} Child Lock`;
-      this.childLockService =
-        this.accessory.getServiceById(Svc.Switch, 'child-lock')
-        ?? this.accessory.addService(Svc.Switch, label, 'child-lock');
-      this.ensureDisplayName(this.childLockService, label);
-      this.childLockService.getCharacteristic(Chr.On)
-        .onGet(() => this.device.childLockOn)
-        .onSet((v: CharacteristicValue) =>
-          this.runMutation('Child Lock', () => this.device.setChildLock(Boolean(v))));
+    // ---- Child Lock (LockMechanism -- semantic upgrade from Switch) ----
+    if (this.ui.exposeChildLock) {
+      this.childLockService = this.accessory.getServiceById(Service.LockMechanism, 'child-lock-mechanism')
+        ?? this.accessory.addService(Service.LockMechanism, this.label('Child Lock', '\ud83d\udd12'), 'child-lock-mechanism');
+      this.childLockService
+        .getCharacteristic(Characteristic.LockCurrentState)
+        .onGet(() => this.computeLockCurrentState());
+      this.childLockService
+        .getCharacteristic(Characteristic.LockTargetState)
+        .onGet(() => this.computeLockTargetState())
+        .onSet((value: CharacteristicValue) => {
+          const lock = Number(value) === Characteristic.LockTargetState.SECURED;
+          void this.runMutation(
+            'Child Lock',
+            async () => {
+              await this.device.setChildLock(lock);
+              // Optimistic LockCurrentState update so Home.app shows the
+              // mechanical state matching the target without a poll wait.
+              this.childLockService?.updateCharacteristic(
+                Characteristic.LockCurrentState,
+                lock
+                  ? Characteristic.LockCurrentState.SECURED
+                  : Characteristic.LockCurrentState.UNSECURED,
+              );
+            },
+          );
+        });
     } else {
-      this.removeStaleService(Svc.Switch, 'child-lock');
+      this.removeServiceIfPresent(Service.LockMechanism, 'child-lock-mechanism');
     }
 
-    // ---- Replace Desiccant (momentary) ----
-    if (this.isEnabled('resetDesiccant')) {
-      const label = `${prefix} Replace Desiccant`;
-      this.desiccantResetService =
-        this.accessory.getServiceById(Svc.Switch, 'desiccant-reset')
-        ?? this.accessory.addService(Svc.Switch, label, 'desiccant-reset');
-      this.ensureDisplayName(this.desiccantResetService, label);
-      this.desiccantResetService.getCharacteristic(Chr.On)
+    // ---- Reset Desiccant (momentary Switch, hidden by default) ----
+    if (this.ui.exposeResetDesiccant) {
+      this.desiccantResetService = this.accessory.getServiceById(Service.Switch, 'desiccant-reset')
+        ?? this.accessory.addService(Service.Switch, this.label('Reset Desiccant', '\ud83e\uddc2'), 'desiccant-reset');
+      this.desiccantResetService
+        .getCharacteristic(Characteristic.On)
         .onGet(() => false)
-        .onSet(async (v: CharacteristicValue) => this.handleDesiccantReset(Boolean(v)));
+        .onSet((value: CharacteristicValue) => {
+          void this.handleDesiccantReset(Boolean(value));
+        });
     } else {
-      this.removeStaleService(Svc.Switch, 'desiccant-reset');
+      this.removeServiceIfPresent(Service.Switch, 'desiccant-reset');
     }
   }
 
-  // ------------------------------------------------------------------
-  // Lifecycle
-  // ------------------------------------------------------------------
-
-  destroy(): void {
-    if (this.feedResetTimer) { clearTimeout(this.feedResetTimer); this.feedResetTimer = null; }
-    if (this.desiccantResetTimer) { clearTimeout(this.desiccantResetTimer); this.desiccantResetTimer = null; }
-    if (this.recentFeedClearTimer) { clearTimeout(this.recentFeedClearTimer); this.recentFeedClearTimer = null; }
-  }
-
+  /** Called by the platform after each polling cycle to push fresh state. */
   refreshCharacteristics(): void {
-    const Chr = this.platform.api.hap.Characteristic;
+    const Characteristic = this.platform.api.hap.Characteristic;
 
-    this.batteryService.updateCharacteristic(Chr.BatteryLevel, this.device.batteryPercent);
-    this.batteryService.updateCharacteristic(Chr.StatusLowBattery, this.computeLowBattery());
-    this.batteryService.updateCharacteristic(Chr.ChargingState, this.computeChargingState());
+    if (this.batteryService) {
+      this.batteryService.updateCharacteristic(
+        Characteristic.BatteryLevel,
+        this.device.batteryPercent,
+      );
+      this.batteryService.updateCharacteristic(
+        Characteristic.StatusLowBattery,
+        this.computeLowBattery(),
+      );
+      this.batteryService.updateCharacteristic(
+        Characteristic.ChargingState,
+        this.computeChargingState(),
+      );
+    }
 
     if (this.foodLowService) {
-      this.foodLowService.updateCharacteristic(Chr.OccupancyDetected,
-        this.device.foodLow
-          ? Chr.OccupancyDetected.OCCUPANCY_DETECTED
-          : Chr.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
-      this.foodLowService.updateCharacteristic(Chr.StatusActive, this.device.online);
+      this.foodLowService.updateCharacteristic(
+        Characteristic.OccupancyDetected,
+        this.boolToOccupancy(this.device.foodLow),
+      );
+      this.foodLowService.updateCharacteristic(
+        Characteristic.StatusActive,
+        this.device.online,
+      );
     }
+
     if (this.dispenserService) {
-      this.dispenserService.updateCharacteristic(Chr.OccupancyDetected,
-        this.device.foodDispenserProblem
-          ? Chr.OccupancyDetected.OCCUPANCY_DETECTED
-          : Chr.OccupancyDetected.OCCUPANCY_NOT_DETECTED);
-      this.dispenserService.updateCharacteristic(Chr.StatusActive, this.device.online);
+      this.dispenserService.updateCharacteristic(
+        Characteristic.OccupancyDetected,
+        this.boolToOccupancy(this.device.foodDispenserProblem),
+      );
+      this.dispenserService.updateCharacteristic(
+        Characteristic.StatusActive,
+        this.device.online,
+      );
     }
+
     if (this.desiccantMaintenanceService) {
       this.desiccantMaintenanceService.updateCharacteristic(
-        Chr.FilterChangeIndication, this.computeDesiccantChangeIndication());
+        Characteristic.FilterChangeIndication,
+        this.computeDesiccantChangeIndication(),
+      );
       this.desiccantMaintenanceService.updateCharacteristic(
-        Chr.FilterLifeLevel, this.computeDesiccantLifeLevel());
+        Characteristic.FilterLifeLevel,
+        this.computeDesiccantLifeLevel(),
+      );
     }
-    if (this.feedingPlanService) {
-      this.feedingPlanService.updateCharacteristic(Chr.On, this.device.feedingPlanEnabled);
-    }
-    if (this.indicatorService) {
-      this.indicatorService.updateCharacteristic(Chr.On, this.device.indicatorLightOn);
-    }
+
+    this.feedingPlanService?.updateCharacteristic(
+      Characteristic.On,
+      this.device.feedingPlanEnabled,
+    );
+    this.indicatorService?.updateCharacteristic(
+      Characteristic.On,
+      this.device.indicatorLightOn,
+    );
+
     if (this.childLockService) {
-      this.childLockService.updateCharacteristic(Chr.On, this.device.childLockOn);
+      this.childLockService.updateCharacteristic(
+        Characteristic.LockCurrentState,
+        this.computeLockCurrentState(),
+      );
+      this.childLockService.updateCharacteristic(
+        Characteristic.LockTargetState,
+        this.computeLockTargetState(),
+      );
     }
+
     this.detectRecentFeed();
   }
 
   // ------------------------------------------------------------------
-  // Service helpers
+  // Helpers
   // ------------------------------------------------------------------
 
-  private isEnabled(key: GranaryServiceKey): boolean {
-    return this.enabledServices.has(key);
+  /**
+   * Build a default service name. If emoji are enabled (default), prefix
+   * with the supplied emoji for at-a-glance scanning in Home.app.
+   * The user can always rename and the rename will stick -- Homebridge
+   * preserves the user's chosen name.
+   */
+  private label(base: string, emoji: string): string {
+    const prefix = this.ui.useEmojiNames ? `${emoji} ` : '';
+    return `${this.device.name} ${prefix}${base}`.trim();
+  }
+
+  private boolToOccupancy(b: boolean): number {
+    const C = this.platform.api.hap.Characteristic;
+    return b
+      ? C.OccupancyDetected.OCCUPANCY_DETECTED
+      : C.OccupancyDetected.OCCUPANCY_NOT_DETECTED;
   }
 
   /**
-   * Update a service's display name and Name characteristic.
-   *
-   * Called on every startup for both cached and freshly-created services
-   * so that users upgrading from an older version (or changing their pet
-   * name in the PETLIBRO app) see the new labels without needing to
-   * remove and re-add the accessory.
+   * Remove a service if currently present on the accessory. Used both
+   * for user-disabled services and for migrating away from legacy
+   * service types (where the service UUID itself changed between versions).
    */
-  private ensureDisplayName(service: Service, name: string): void {
-    service.displayName = name;
-    try {
-      service.updateCharacteristic(
-        this.platform.api.hap.Characteristic.Name, name,
-      );
-    } catch {
-      // Some service types may not support the Name characteristic.
-      // Not critical -- displayName alone is sufficient for most UIs.
-    }
-  }
-
-  private removeStaleService(
-    serviceType: WithUUID<typeof Service>,
-    subtype: string,
+  private removeServiceIfPresent(
+    serviceCtor: WithUUID<typeof Service>,
+    subtype?: string,
   ): void {
-    const existing = this.accessory.getServiceById(serviceType, subtype);
+    const existing = subtype
+      ? this.accessory.getServiceById(serviceCtor, subtype)
+      : this.accessory.getService(serviceCtor);
     if (existing) {
-      this.platform.log.info(
-        `Removing disabled service "${subtype}" from ${this.device.name}`,
-      );
       this.accessory.removeService(existing);
+      this.platform.log.debug(
+        `Removed ${subtype ? `${subtype} ` : ''}service from ${this.device.name}.`,
+      );
     }
   }
 
   // ------------------------------------------------------------------
-  // Compute helpers
+  // Compute helpers -- pure functions of device state
   // ------------------------------------------------------------------
 
   computeLowBattery(): number {
-    const Chr = this.platform.api.hap.Characteristic;
+    const C = this.platform.api.hap.Characteristic;
     if (this.device.chargingState === 'NOT_CHARGEABLE') {
-      return Chr.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+      return C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
     }
     const pct = this.device.batteryPercent;
     const state = this.device.batteryState;
     const lowByState = state === 'LOW' || state === 'CRITICAL';
     const lowByPct = pct > 0 && pct < LOW_BATTERY_PCT;
     return (lowByState || lowByPct)
-      ? Chr.StatusLowBattery.BATTERY_LEVEL_LOW
-      : Chr.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+      ? C.StatusLowBattery.BATTERY_LEVEL_LOW
+      : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
   }
 
   computeChargingState(): number {
-    const Chr = this.platform.api.hap.Characteristic;
+    const C = this.platform.api.hap.Characteristic;
     switch (this.device.chargingState) {
-      case 'CHARGING': return Chr.ChargingState.CHARGING;
-      case 'NOT_CHARGING': return Chr.ChargingState.NOT_CHARGING;
-      default: return Chr.ChargingState.NOT_CHARGEABLE;
+      case 'CHARGING': return C.ChargingState.CHARGING;
+      case 'NOT_CHARGING': return C.ChargingState.NOT_CHARGING;
+      default: return C.ChargingState.NOT_CHARGEABLE;
     }
   }
 
   computeDesiccantChangeIndication(): number {
-    const Chr = this.platform.api.hap.Characteristic;
+    const C = this.platform.api.hap.Characteristic;
     const days = this.device.remainingDesiccantDays;
-    if (days === null) return Chr.FilterChangeIndication.FILTER_OK;
+    if (days === null) return C.FilterChangeIndication.FILTER_OK;
     return days <= 0
-      ? Chr.FilterChangeIndication.CHANGE_FILTER
-      : Chr.FilterChangeIndication.FILTER_OK;
+      ? C.FilterChangeIndication.CHANGE_FILTER
+      : C.FilterChangeIndication.FILTER_OK;
   }
 
   computeDesiccantLifeLevel(): number {
-    const cycle = Number(this.platform.config.desiccantCycleDays ?? DESICCANT_DEFAULT_DAYS);
-    const safeCycle = Number.isFinite(cycle) && cycle > 0 ? cycle : DESICCANT_DEFAULT_DAYS;
     const days = this.device.remainingDesiccantDays ?? 0;
-    const pct = Math.round((days / safeCycle) * 100);
+    const cycle = this.platform.config.desiccantCycleDays ?? DESICCANT_DEFAULT_DAYS;
+    const pct = Math.round((days / cycle) * 100);
     return Math.max(0, Math.min(100, pct));
   }
 
+  private computeLockCurrentState(): number {
+    const C = this.platform.api.hap.Characteristic;
+    return this.device.childLockOn
+      ? C.LockCurrentState.SECURED
+      : C.LockCurrentState.UNSECURED;
+  }
+
+  private computeLockTargetState(): number {
+    const C = this.platform.api.hap.Characteristic;
+    return this.device.childLockOn
+      ? C.LockTargetState.SECURED
+      : C.LockTargetState.UNSECURED;
+  }
+
   // ------------------------------------------------------------------
-  // Feed detection
+  // Recent-feed pulse
   // ------------------------------------------------------------------
 
   private detectRecentFeed(): void {
     if (!this.recentFeedService) return;
     const latest = this.device.lastFeedTimeMs;
     if (latest === null) return;
-    if (this.lastObservedFeedMs !== null && latest <= this.lastObservedFeedMs) return;
-    this.lastObservedFeedMs = latest;
-    this.firePulseRecentFeed(`workRecord (${this.device.lastFeedQuantity} portion(s))`);
+    if (this.lastObservedFeedMs !== null && latest <= this.lastObservedFeedMs) {
+      return;
+    }
+    this.pulseRecentFeed(latest, this.device.lastFeedQuantity);
   }
 
-  private firePulseRecentFeed(reason: string): void {
+  /**
+   * Briefly open the Recent Feed contact sensor. Public so the manual-feed
+   * handler can fire it immediately on a successful local feed instead of
+   * waiting up to 60s for workRecord polling to surface the event.
+   */
+  pulseRecentFeed(timestampMs: number, portions: number): void {
     if (!this.recentFeedService) return;
-    const Chr = this.platform.api.hap.Characteristic;
+    const C = this.platform.api.hap.Characteristic;
+    this.lastObservedFeedMs = timestampMs;
+
     this.recentFeedService.updateCharacteristic(
-      Chr.ContactSensorState, Chr.ContactSensorState.CONTACT_NOT_DETECTED);
-    this.platform.log.debug(`${this.device.name}: recent feed pulse -- ${reason}`);
+      C.ContactSensorState,
+      C.ContactSensorState.CONTACT_NOT_DETECTED,
+    );
+    this.platform.log.debug(
+      `${this.device.name}: recent feed pulse (${portions} portion(s))`,
+    );
+
     if (this.recentFeedClearTimer) clearTimeout(this.recentFeedClearTimer);
     this.recentFeedClearTimer = setTimeout(() => {
-      if (this.recentFeedService) {
-        this.recentFeedService.updateCharacteristic(
-          Chr.ContactSensorState, Chr.ContactSensorState.CONTACT_DETECTED);
-      }
+      this.recentFeedService?.updateCharacteristic(
+        C.ContactSensorState,
+        C.ContactSensorState.CONTACT_DETECTED,
+      );
     }, RECENT_FEED_PULSE_MS);
   }
 
@@ -398,19 +468,26 @@ export class GranarySmartFeederAccessory {
   // Mutation handlers
   // ------------------------------------------------------------------
 
+  /**
+   * Wrap any mutation: log it, run it, ask the platform to boost polling
+   * so the UI catches up quickly, and refresh characteristics from the
+   * (optimistic) device state. Errors are swallowed-but-logged so HomeKit
+   * doesn't show "threw from characteristic" warnings; state self-corrects
+   * on the next poll.
+   */
   private async runMutation(label: string, fn: () => Promise<void>): Promise<void> {
     try {
       await fn();
       this.platform.boostPolling();
-      this.debouncedRefresh();
+      this.refreshCharacteristics();
     } catch (err) {
-      this.platform.log.error(`${label} failed on ${this.device.name}:`, err);
-      this.debouncedRefresh();
+      this.platform.log.error(`${label} change failed on ${this.device.name}:`, err);
     }
   }
 
   private async handleFeedNow(requested: boolean): Promise<void> {
     if (!requested) return;
+
     if (!this.device.online) {
       this.platform.log.warn(`Manual feed skipped: ${this.device.name} is offline.`);
       this.scheduleFeedSwitchReset();
@@ -421,11 +498,17 @@ export class GranarySmartFeederAccessory {
       this.scheduleFeedSwitchReset();
       return;
     }
+
     const portions = this.platform.config.manualFeedPortions ?? 2;
-    this.platform.log.info(`Manual feed triggered on ${this.device.name}: ${portions} portion(s)`);
+    this.platform.log.info(
+      `Manual feed triggered on ${this.device.name}: ${portions} portion(s)`,
+    );
+
     try {
       const dispensed = await this.device.manualFeed(portions);
-      this.firePulseRecentFeed(`manual feed (${dispensed} portion(s))`);
+      // Pulse the Recent Feed sensor immediately -- we know a feed just
+      // happened, no need to wait for the next workRecord poll.
+      this.pulseRecentFeed(Date.now(), dispensed);
       this.platform.boostPolling();
     } catch (err) {
       this.platform.log.error(`Manual feed failed on ${this.device.name}:`, err);
@@ -437,29 +520,30 @@ export class GranarySmartFeederAccessory {
     if (!this.feedNowService) return;
     if (this.feedResetTimer) clearTimeout(this.feedResetTimer);
     this.feedResetTimer = setTimeout(() => {
-      if (this.feedNowService) {
-        this.feedNowService.updateCharacteristic(this.platform.api.hap.Characteristic.On, false);
-      }
+      this.feedNowService?.updateCharacteristic(
+        this.platform.api.hap.Characteristic.On,
+        false,
+      );
     }, MOMENTARY_SWITCH_RESET_MS);
   }
 
   private async handleDesiccantReset(requested: boolean): Promise<void> {
     if (!requested) return;
     this.platform.log.info(`Desiccant reset triggered on ${this.device.name}`);
+
     try {
       await this.device.resetDesiccant();
       this.platform.boostPolling();
     } catch (err) {
       this.platform.log.error(`Desiccant reset failed on ${this.device.name}:`, err);
     }
-    if (!this.desiccantResetService) return;
+
     if (this.desiccantResetTimer) clearTimeout(this.desiccantResetTimer);
     this.desiccantResetTimer = setTimeout(() => {
-      if (this.desiccantResetService) {
-        this.desiccantResetService.updateCharacteristic(this.platform.api.hap.Characteristic.On, false);
-      }
+      this.desiccantResetService?.updateCharacteristic(
+        this.platform.api.hap.Characteristic.On,
+        false,
+      );
     }, MOMENTARY_SWITCH_RESET_MS);
   }
 }
-
-type WithUUID<T> = T & { UUID: string };
