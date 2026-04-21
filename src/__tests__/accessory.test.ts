@@ -439,6 +439,21 @@ describe('GranarySmartFeederAccessory', () => {
     });
   });
 
+  describe('destroy', () => {
+    it('clears outstanding timers without throwing', () => {
+      const handler = createAccessoryHandler();
+      // Should not throw even if no timers are active
+      expect(() => handler.destroy()).not.toThrow();
+    });
+
+    it('can be called multiple times safely', () => {
+      const handler = createAccessoryHandler();
+      handler.destroy();
+      handler.destroy();
+      // No assertion needed -- just verifying it doesn't throw
+    });
+  });
+
   describe('primaryPetName on Device', () => {
     it('returns null when no boundPets', () => {
       const device = makeFeeder();
