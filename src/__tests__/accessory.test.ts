@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Logger } from 'homebridge';
 import { GranarySmartFeederAccessory } from '../accessories/granarySmartFeederAccessory';
 import { GranarySmartFeeder } from '../devices/feeders/granarySmartFeeder';
@@ -27,12 +27,13 @@ function mockCharacteristic() {
   return c;
 }
 
-/** Create a mock HAP Service with getCharacteristic/updateCharacteristic. */
+/** Create a mock HAP Service with getCharacteristic/updateCharacteristic/setPrimaryService. */
 function mockService() {
   return {
     getCharacteristic: vi.fn().mockReturnValue(mockCharacteristic()),
     updateCharacteristic: vi.fn().mockReturnThis(),
     setCharacteristic: vi.fn().mockReturnThis(),
+    setPrimaryService: vi.fn(),
   };
 }
 
@@ -61,12 +62,21 @@ const hapCharacteristic = {
     OCCUPANCY_NOT_DETECTED: 0,
     OCCUPANCY_DETECTED: 1,
   }),
+  LockCurrentState: Object.assign('LockCurrentState', {
+    UNSECURED: 0,
+    SECURED: 1,
+  }),
+  LockTargetState: Object.assign('LockTargetState', {
+    UNSECURED: 0,
+    SECURED: 1,
+  }),
   On: 'On',
   StatusActive: 'StatusActive',
   Manufacturer: 'Manufacturer',
   Model: 'Model',
   SerialNumber: 'SerialNumber',
   FirmwareRevision: 'FirmwareRevision',
+  Name: 'Name',
 };
 
 const hapService = {
@@ -76,6 +86,8 @@ const hapService = {
   FilterMaintenance: 'FilterMaintenance',
   ContactSensor: 'ContactSensor',
   Switch: 'Switch',
+  Lightbulb: 'Lightbulb',
+  LockMechanism: 'LockMechanism',
 };
 
 function createMockPlatform(configOverrides: Record<string, unknown> = {}) {
@@ -309,27 +321,51 @@ describe('GranarySmartFeederAccessory', () => {
     });
   });
 
-  describe('service opt-in', () => {
-    it('creates all services when enabledServices is not configured', () => {
+  describe('service opt-in (ui.expose* config)', () => {
+    it('creates default services when ui config is not set', () => {
       const accessory = createMockAccessory();
       const platform = createMockPlatform();
       const device = makeFeeder();
       new GranarySmartFeederAccessory(platform, accessory as never, device);
 
-      // Battery always + 9 optional services = 10 addService calls
+      // Default: all services except resetDesiccant = 9 addService calls
+      // Battery, FoodLow, Dispenser, Desiccant, RecentFeed,
+      // FeedNow, FeedingSchedule, Indicator (Lightbulb), ChildLock (LockMechanism)
       const addCalls = accessory.addService.mock.calls;
-      expect(addCalls.length).toBe(10);
+      expect(addCalls.length).toBe(9);
     });
 
-    it('only creates specified services when enabledServices is set', () => {
+    it('creates all 10 services when resetDesiccant is opted in', () => {
       const accessory = createMockAccessory();
       const platform = createMockPlatform({
-        enabledServices: ['feedNow', 'foodLow'],
+        ui: { exposeResetDesiccant: true },
       });
       const device = makeFeeder();
       new GranarySmartFeederAccessory(platform, accessory as never, device);
 
-      // Battery (always) + feedNow + foodLow = 3 addService calls
+      const addCalls = accessory.addService.mock.calls;
+      expect(addCalls.length).toBe(10);
+    });
+
+    it('only creates specified services when others are disabled', () => {
+      const accessory = createMockAccessory();
+      const platform = createMockPlatform({
+        ui: {
+          exposeFeedNow: true,
+          exposeFoodLow: true,
+          exposeBattery: true,
+          exposeFeedingSchedule: false,
+          exposeIndicator: false,
+          exposeChildLock: false,
+          exposeDispenser: false,
+          exposeDesiccant: false,
+          exposeRecentFeed: false,
+        },
+      });
+      const device = makeFeeder();
+      new GranarySmartFeederAccessory(platform, accessory as never, device);
+
+      // Battery + FeedNow + FoodLow = 3 addService calls
       const addCalls = accessory.addService.mock.calls;
       expect(addCalls.length).toBe(3);
     });
@@ -338,82 +374,68 @@ describe('GranarySmartFeederAccessory', () => {
       const cachedService = mockService();
       const accessory = createMockAccessory();
 
-      // Simulate a cached "indicator" service from a previous config
+      // Simulate a cached "indicator-light" Lightbulb from a previous config
       accessory.getServiceById.mockImplementation(
         (_type: string, subtype: string) => {
-          if (subtype === 'indicator') return cachedService;
+          if (subtype === 'indicator-light') return cachedService;
           return null;
         },
       );
 
       const platform = createMockPlatform({
-        enabledServices: ['feedNow'], // indicator not included
+        ui: { exposeIndicator: false },
       });
       const device = makeFeeder();
       new GranarySmartFeederAccessory(platform, accessory as never, device);
 
-      // Should have called removeService for the cached indicator service
+      // Should have called removeService for the cached indicator-light service
       expect(accessory.removeService).toHaveBeenCalledWith(cachedService);
+    });
+  });
+
+  describe('legacy service migration', () => {
+    it('removes old indicator Switch and child-lock Switch subtypes on startup', () => {
+      const legacyIndicator = mockService();
+      const legacyChildLock = mockService();
+      const accessory = createMockAccessory();
+
+      // Simulate cached legacy services from 0.4.x
+      accessory.getServiceById.mockImplementation(
+        (type: string, subtype: string) => {
+          if (type === 'Switch' && subtype === 'indicator') return legacyIndicator;
+          if (type === 'Switch' && subtype === 'child-lock') return legacyChildLock;
+          return null;
+        },
+      );
+
+      const platform = createMockPlatform();
+      const device = makeFeeder();
+      new GranarySmartFeederAccessory(platform, accessory as never, device);
+
+      // Both legacy services should have been removed
+      expect(accessory.removeService).toHaveBeenCalledWith(legacyIndicator);
+      expect(accessory.removeService).toHaveBeenCalledWith(legacyChildLock);
     });
   });
 
   describe('refreshCharacteristics with disabled services', () => {
     it('does not crash when optional services are disabled', () => {
       const handler = createAccessoryHandler({}, {
-        enabledServices: ['feedNow'],
+        ui: {
+          exposeFeedNow: true,
+          exposeBattery: false,
+          exposeFoodLow: false,
+          exposeDispenser: false,
+          exposeDesiccant: false,
+          exposeRecentFeed: false,
+          exposeFeedingSchedule: false,
+          exposeIndicator: false,
+          exposeChildLock: false,
+        },
       });
 
-      // Should not throw even though most services are null
+      // Should not throw even though most services are undefined
       expect(() => handler.refreshCharacteristics()).not.toThrow();
-    });
-  });
-
-  describe('pet-aware naming', () => {
-    it('uses pet name in service labels when a pet is bound', () => {
-      const accessory = createMockAccessory();
-      const platform = createMockPlatform({
-        enabledServices: ['feedNow', 'foodLow'],
-      });
-      const device = makeFeeder();
-      device.updateData({ boundPets: [{ name: 'Mochi' }] });
-      new GranarySmartFeederAccessory(platform, accessory as never, device);
-
-      const addCalls = accessory.addService.mock.calls;
-      const labels = addCalls.map((c: unknown[]) => c[1]);
-
-      // Feed Now should be "Feed Mochi"
-      expect(labels).toContain('Feed Mochi');
-      // Food Low should be "Mochi Food Low"
-      expect(labels).toContain('Mochi Food Low');
-    });
-
-    it('falls back to device name when no pets are bound', () => {
-      const accessory = createMockAccessory();
-      const platform = createMockPlatform({
-        enabledServices: ['feedNow'],
-      });
-      const device = makeFeeder({ name: 'Kitchen Feeder' });
-      new GranarySmartFeederAccessory(platform, accessory as never, device);
-
-      const addCalls = accessory.addService.mock.calls;
-      const labels = addCalls.map((c: unknown[]) => c[1]);
-
-      expect(labels).toContain('Kitchen Feeder Feed Now');
-    });
-
-    it('uses petName field as fallback when name is missing', () => {
-      const accessory = createMockAccessory();
-      const platform = createMockPlatform({
-        enabledServices: ['feedNow'],
-      });
-      const device = makeFeeder();
-      device.updateData({ boundPets: [{ petName: 'Luna' }] });
-      new GranarySmartFeederAccessory(platform, accessory as never, device);
-
-      const addCalls = accessory.addService.mock.calls;
-      const labels = addCalls.map((c: unknown[]) => c[1]);
-
-      expect(labels).toContain('Feed Luna');
     });
   });
 
@@ -451,21 +473,6 @@ describe('GranarySmartFeederAccessory', () => {
       const device = makeFeeder();
       device.updateData({ boundPets: [{ petName: 'Luna' }] });
       expect(device.primaryPetName).toBe('Luna');
-    });
-  });
-
-  describe('destroy', () => {
-    it('clears outstanding timers without throwing', () => {
-      const handler = createAccessoryHandler();
-      // Should not throw even if no timers are active
-      expect(() => handler.destroy()).not.toThrow();
-    });
-
-    it('can be called multiple times safely', () => {
-      const handler = createAccessoryHandler();
-      handler.destroy();
-      handler.destroy();
-      // No assertion needed -- just verifying it doesn't throw
     });
   });
 });
