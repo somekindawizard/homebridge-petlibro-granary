@@ -1,69 +1,110 @@
-# homebridge-petlibro-granary
+<div align="center">
 
-[![npm](https://img.shields.io/npm/v/homebridge-petlibro-granary)](https://www.npmjs.com/package/homebridge-petlibro-granary)
-[![Build](https://github.com/somekindawizard/homebridge-petlibro-granary/actions/workflows/ci.yml/badge.svg)](https://github.com/somekindawizard/homebridge-petlibro-granary/actions)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+# 🐾 Homebridge PETLIBRO Granary
 
-A [Homebridge](https://homebridge.io) plugin for the PETLIBRO Granary Smart Feeder.
+**HomeKit control for PETLIBRO Granary Smart Feeders via Homebridge**
 
-This is a Homebridge port of the feeder-side of [jjjonesjr33/petlibro](https://github.com/jjjonesjr33/petlibro)
-(the Home Assistant integration). All credit for the API reverse-engineering
-belongs to Jamie Jones Jr. and contributors. Licensed GPL-3.0-or-later to
-match the upstream project.
+[![npm][npm-badge]][npm-url]
+[![Build][build-badge]][build-url]
+[![Node][node-badge]][node-url]
+[![Homebridge][hb-badge]][hb-url]
+[![License][license-badge]][license-url]
+[![GitHub Issues][issues-badge]][issues-url]
 
-## Installation
+Feed your pets, monitor food levels, manage desiccant, and automate schedules<br>
+all from the Apple Home app and Siri.
 
-### Via Homebridge UI (recommended)
+[Install](#-installation) · [Configuration](#-configuration) · [HomeKit Mapping](#-homekit-mapping) · [Report a Bug][issues-url]
 
-1. Open the Homebridge UI in your browser.
-2. Go to the **Plugins** tab and search for `homebridge-petlibro-granary`.
-3. Click **Install**.
-4. Configure the plugin under the **Settings** tab (see [Configuration](#configuration) below).
+</div>
 
-### Via command line
+---
+
+> **Homebridge port** of the feeder side of [jjjonesjr33/petlibro](https://github.com/jjjonesjr33/petlibro) (the Home Assistant integration). All credit for the API reverse-engineering belongs to Jamie Jones Jr. and contributors. Licensed GPL-3.0-or-later to match the upstream project.
+
+---
+
+## ⚡ Quick Start
+
+```
+1.  Homebridge UI → Plugins → search "homebridge-petlibro-granary" → Install
+2.  Settings tab → enter your PETLIBRO email & password
+3.  Restart Homebridge → your feeder appears in Apple Home
+```
+
+> **💡 Tip:** Use a [dedicated PETLIBRO account](#-use-a-dedicated-petlibro-account) so the mobile app and Homebridge don't fight over the single-session slot.
+
+---
+
+## ⚠️ Status
+
+**Early / experimental.** Supports both Granary variants. Camera on the PLAF203 is intentionally not exposed (requires Kalay TUTK SDK that hasn't been reverse-engineered).
+
+| Status | Device |
+|:---:|---|
+| ✅ Supported | **Granary Smart Feeder** (PLAF103) |
+| ✅ Supported | **Granary Smart Camera Feeder** (PLAF203) — feeder controls only |
+| ⬚ Out of scope | Air / Space / Polar / One RFID feeders, Dockstream fountains, Luma litter box |
+
+---
+
+## 📦 Installation
+
+### Via Homebridge UI (Recommended)
+
+1. Open the Homebridge UI in your browser
+2. Go to **Plugins** → search for `homebridge-petlibro-granary`
+3. Click **Install**
+4. Configure under the **Settings** tab (see [Configuration](#-configuration))
+
+### Via Command Line
 
 ```bash
 npm install -g homebridge-petlibro-granary
 ```
 
-Then add the platform block to your Homebridge `config.json` (see below).
+Then add the platform block to your `config.json` (see below).
 
-## Status
+---
 
-**Early / experimental.** Supports both variants of the PETLIBRO Granary
-Smart Feeder. The camera on the PLAF203 is intentionally not exposed -- the
-PETLIBRO camera API requires Kalay TUTK SDK integration that hasn't been
-reverse-engineered yet.
+## 🏠 HomeKit Mapping
 
-- [x] Granary Smart Feeder (PLAF103)
-- [x] Granary Smart Camera Feeder (PLAF203) -- feeder controls only
+Service names adapt to your setup. If you have a pet named "Mochi" bound to the feeder in the PETLIBRO app, tiles read "Feed Mochi", "Mochi Food Low", etc. Otherwise they use the device name you set in the app.
 
-Other PETLIBRO devices (Air / Space / Polar / One RFID feeders, Dockstream
-fountains, Luma litter box) are out of scope for this plugin.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-## HomeKit mapping
+### Sensors & Status
+| HomeKit Service | What It Reports |
+|---|---|
+| 🔋 **Battery** | Battery %, low-battery flag, charging state |
+| 🍽️ **Food Low** | Occupancy = food level is low |
+| 🚫 **Feeder Jam** | Occupancy = grain outlet blocked |
+| 🧂 **Desiccant Life** | "Change Filter" when days remaining = 0; 0-100% life level |
+| 📬 **Last Fed** | Contact opens for 30s on each successful feed event |
 
-Service names adapt to your setup. If you have a pet named "Mochi" bound to
-the feeder in the PETLIBRO app, tiles will read "Feed Mochi", "Mochi Food Low",
-etc. Otherwise they use the device name you set in the app.
+</td>
+<td width="50%" valign="top">
 
-| HomeKit service                  | What it reports / controls                                   |
-|----------------------------------|--------------------------------------------------------------|
-| Battery                          | Battery %, low-battery flag, charging state (CHARGING / NOT_CHARGING / NOT_CHARGEABLE) |
-| Occupancy Sensor: Food Low       | Occupied = food is low                                       |
-| Occupancy Sensor: Feeder Jam     | Occupied = grain outlet is blocked / jammed                  |
-| Filter Maintenance: Desiccant    | "Change Filter" when remaining days <= 0; life level shown as 0-100% against the configured cycle (default 30 days) |
-| Contact Sensor: Last Fed         | Briefly opens (CONTACT_NOT_DETECTED) for 30s when a new successful feed event is detected; pulses immediately for plugin-initiated feeds, otherwise on next poll |
-| Switch: Feed Now                 | Momentary: dispenses configured portion count. Skipped when offline or in sleep mode |
-| Switch: Schedule                 | Enable/disable the recurring feeding plan                    |
-| Switch: Indicator                | Turns the on-device LED on/off                               |
-| Switch: Child Lock               | Locks/unlocks the hardware buttons                           |
-| Switch: Replace Desiccant        | Momentary: resets the desiccant-life day counter             |
+### Controls
+| HomeKit Service | What It Controls |
+|---|---|
+| 🍖 **Feed Now** | Momentary: dispenses configured portions |
+| 📅 **Schedule** | Enable/disable the recurring feeding plan |
+| 💡 **Indicator** | Toggle the on-device LED |
+| 🔒 **Child Lock** | Lock/unlock hardware buttons |
+| 🔄 **Replace Desiccant** | Momentary: resets desiccant-life counter |
 
-> **Tip:** Battery is always shown. All other services are optional. See the
-> `enabledServices` config below to choose which tiles appear in the Home app.
+</td>
+</tr>
+</table>
 
-## Configuration
+> **Battery is always shown.** All other services are optional. See [`enabledServices`](#choosing-which-tiles-to-show) to control which tiles appear.
+
+---
+
+## ⚙️ Configuration
 
 ```json
 {
@@ -93,140 +134,198 @@ etc. Otherwise they use the device name you set in the app.
 }
 ```
 
-### Choosing which tiles to show
+<details>
+<summary><strong>Config Field Reference</strong> — click to expand</summary>
 
-By default, all 9 optional services are enabled. If your Home app feels
-cluttered, you can trim the list. A minimal setup might look like:
+&nbsp;
+
+| Field | Type | Default | Description |
+|---|---|:---:|---|
+| `email` | string | *required* | PETLIBRO account email |
+| `password` | string | *required* | PETLIBRO account password |
+| `region` | string | `"US"` | API region (only US currently supported) |
+| `pollIntervalSeconds` | number | `60` | Fast-tier polling interval in seconds |
+| `manualFeedPortions` | number | `2` | Portions dispensed per Feed Now tap |
+| `desiccantCycleDays` | number | `30` | Days in desiccant replacement cycle |
+| `enabledServices` | string[] | all 9 | Which optional HomeKit tiles to show |
+| `debug` | boolean | `false` | Enable verbose HTTP/API logging |
+
+</details>
+
+---
+
+### Choosing Which Tiles to Show
+
+By default, all 9 optional services are enabled. If your Home app feels cluttered, trim the list. A minimal setup:
 
 ```json
 "enabledServices": ["feedNow", "foodLow", "feedingSchedule"]
 ```
 
-This gives you a Feed Now button, a low-food alert, and a schedule toggle,
-plus the always-present Battery tile. You can always add services back later;
-just restart Homebridge after changing the config.
+This gives you a Feed Now button, a low-food alert, and a schedule toggle, plus the always-present Battery tile.
 
-| Key                    | Service                                  |
-|------------------------|------------------------------------------|
-| `feedNow`              | Feed Now / Feed [Pet] (momentary switch) |
-| `feedingSchedule`      | Schedule (on/off switch)                 |
-| `foodLow`              | Food Low (occupancy sensor)              |
-| `dispenser`            | Feeder Jam (occupancy sensor)            |
-| `desiccantMaintenance` | Desiccant Life (filter maintenance)      |
-| `recentFeed`           | Last Fed (contact sensor pulse)          |
-| `indicator`            | Indicator Light (on/off switch)          |
-| `childLock`            | Child Lock (on/off switch)               |
-| `resetDesiccant`       | Replace Desiccant (momentary switch)     |
+| Key | HomeKit Service |
+|---|---|
+| `feedNow` | Feed Now / Feed [Pet] (momentary switch) |
+| `feedingSchedule` | Schedule (on/off switch) |
+| `foodLow` | Food Low (occupancy sensor) |
+| `dispenser` | Feeder Jam (occupancy sensor) |
+| `desiccantMaintenance` | Desiccant Life (filter maintenance) |
+| `recentFeed` | Last Fed (contact sensor pulse) |
+| `indicator` | Indicator Light (on/off switch) |
+| `childLock` | Child Lock (on/off switch) |
+| `resetDesiccant` | Replace Desiccant (momentary switch) |
 
-### Use a dedicated PETLIBRO account
+> Add or remove services any time. Just restart Homebridge after changing the config.
 
-PETLIBRO only allows **one active session per account**. If Homebridge logs in
-while the PETLIBRO mobile app is signed in (or vice versa), one of them gets
-silently kicked out.
+---
+
+### 🔐 Use a Dedicated PETLIBRO Account
+
+PETLIBRO only allows **one active session per account**. If Homebridge logs in while the mobile app is signed in (or vice versa), one gets silently kicked out.
 
 **Recommended setup:**
 
-1. Create a new PETLIBRO account just for Homebridge (`homebridge@yourdomain.com` works fine).
-2. From your *primary* account, share each Granary feeder to the Homebridge account.
-3. Use the Homebridge account credentials in this plugin.
+1. Create a new PETLIBRO account just for Homebridge
+2. From your *primary* account, share each Granary feeder to the new account
+3. Use the Homebridge account credentials in this plugin
 
-This keeps the mobile app and Homebridge running side-by-side without fighting.
+This keeps the mobile app and Homebridge running side-by-side without conflict.
 
-### Security notes
+<details>
+<summary><strong>🛡️ Security Notes</strong></summary>
 
-- Your PETLIBRO password is stored in Homebridge's `config.json`. The plugin
-  MD5-hashes it before sending it to the API, but the original is needed to
-  log in. We recommend using a unique password for the dedicated account.
-- The cached session token is encrypted at rest with AES-256-GCM keyed off
-  machine-stable identifiers (hostname, primary MAC). This is defense-in-depth
-  against backup-snapshot leaks; an attacker who can run code on the same machine
-  can still recover the key.
-- Cached token file: `<homebridge-storage>/homebridge-petlibro-granary-token.json`.
-  Delete it to force re-login on next start.
+&nbsp;
 
-## Polling architecture
+- Your PETLIBRO password is stored in Homebridge's `config.json`. The plugin MD5-hashes it before sending it to the API, but the original is needed to log in. Use a unique password for the dedicated account.
+- The cached session token is encrypted at rest with **AES-256-GCM** keyed off machine-stable identifiers (hostname, primary MAC). This is defense-in-depth against backup-snapshot leaks; an attacker who can run code on the same machine can still recover the key.
+- Cached token file: `<homebridge-storage>/homebridge-petlibro-granary-token.json`. Delete it to force re-login on next start.
 
-The plugin uses a tiered polling strategy to balance responsiveness against
-PETLIBRO API load:
+</details>
 
-- **Fast tier** (every `pollIntervalSeconds`, default 60s):
-  realInfo, grainStatus, workRecord -- anything that changes minute-to-minute.
-- **Slow tier** (every 5 min):
-  attribute settings, OTA, feeding plan list, bound pets -- rarely change.
-- **Adaptive boost**: after any user-initiated mutation (toggle, manual feed),
-  the fast tier drops to 15s for 2 minutes so the UI catches up quickly.
-- **Jitter**: each tick has +/-10% randomization so multiple Homebridge instances
-  don't synchronize against PETLIBRO's servers.
+---
 
-A single PETLIBRO Switch toggle costs ~1 API call thanks to optimistic local
-updates and a per-device mutation lock. The HomeKit UI flips instantly; the
-next polling cycle reconciles against the server.
+## 🔄 Polling Architecture
 
-## Troubleshooting
+The plugin uses a tiered strategy to balance responsiveness against PETLIBRO API load:
 
-### "Session expired" in a loop / repeated 1009 errors
+<table>
+<tr>
+<td width="50%" valign="top">
 
-The PETLIBRO mobile app is probably logged into the same account. Either sign
-out of the mobile app, or use a dedicated Homebridge account (see above).
+**⚡ Fast Tier** — every `pollIntervalSeconds` (default 60s)
+- `realInfo` — battery, food level, online status
+- `grainStatus` — dispenser/jam state
+- `workRecord` — recent feed events
 
-### "Login circuit breaker tripped"
+</td>
+<td width="50%" valign="top">
 
-You've had 6 or more consecutive failed logins. The plugin stops trying so it
-doesn't get your account locked. Fix your credentials and restart Homebridge.
+**🐢 Slow Tier** — every 5 minutes
+- Attribute settings (indicator, child lock)
+- OTA status
+- Feeding plan list
+- Bound pets
 
-### "PETLIBRO authentication failed permanently"
+</td>
+</tr>
+</table>
 
-PETLIBRO returned a "wrong credentials" code. The plugin will not retry until
-restart. Check the email/password in config.json carefully.
+| Behavior | How It Works |
+|---|---|
+| **Adaptive boost** | After any user-initiated mutation, fast tier drops to 15s for 2 minutes |
+| **Jitter** | Each tick has +/-10% randomization to prevent multi-instance synchronization |
+| **Optimistic updates** | Toggles flip the local state immediately; next poll reconciles with the server |
+| **Mutation lock** | Per-device lock serializes rapid toggles to prevent races |
+| **API cost** | A single toggle costs ~1 API call thanks to optimistic updates |
 
-### Manual feed switch does nothing
+---
 
-Check the log. Feeds are skipped when the device is offline or in its
-configured sleep window. Both conditions are logged at `warn`.
+## 🔧 Troubleshooting
 
-### Battery shows 0% with no warning
+<details>
+<summary><strong>"Session expired" in a loop / repeated 1009 errors</strong></summary>
 
-Normal: the Granary is mains-powered and reports 0% with `chargingState =
-NOT_CHARGEABLE` when no D-cell backup batteries are installed. The plugin
-suppresses the StatusLowBattery flag in this state.
+&nbsp;
 
-### Service names didn't update after upgrading
+The PETLIBRO mobile app is probably logged into the same account. Either sign out of the mobile app, or use a [dedicated Homebridge account](#-use-a-dedicated-petlibro-account).
 
-As of v0.5.0 the plugin pushes updated display names to cached services on
-every startup. If you're upgrading from an older version, just restart
-Homebridge and the new labels (pet-aware or improved defaults) will appear
-automatically. No need to remove and re-add the accessory.
+</details>
 
-### Reset / start fresh
+<details>
+<summary><strong>"Login circuit breaker tripped"</strong></summary>
+
+&nbsp;
+
+You've had 6+ consecutive failed logins. The plugin stops trying to prevent account lockout. Fix your credentials and restart Homebridge.
+
+</details>
+
+<details>
+<summary><strong>"PETLIBRO authentication failed permanently"</strong></summary>
+
+&nbsp;
+
+PETLIBRO returned a "wrong credentials" code. The plugin will not retry until restart. Double-check the email and password in `config.json`.
+
+</details>
+
+<details>
+<summary><strong>Manual feed switch does nothing</strong></summary>
+
+&nbsp;
+
+Feeds are skipped when the device is offline or in its configured sleep window. Both conditions are logged at `warn`. Check the Homebridge log for details.
+
+</details>
+
+<details>
+<summary><strong>Battery shows 0% with no warning</strong></summary>
+
+&nbsp;
+
+Normal behavior. The Granary is mains-powered and reports 0% with `chargingState = NOT_CHARGEABLE` when no D-cell backup batteries are installed. The plugin suppresses the low-battery flag in this state.
+
+</details>
+
+<details>
+<summary><strong>Service names didn't update after upgrading</strong></summary>
+
+&nbsp;
+
+As of v0.5.0, the plugin pushes updated display names on every startup. Just restart Homebridge and the new labels (pet-aware or improved defaults) appear automatically. No need to remove and re-add the accessory.
+
+</details>
+
+<details>
+<summary><strong>Reset / start fresh</strong></summary>
+
+&nbsp;
 
 ```bash
 rm <homebridge-storage>/homebridge-petlibro-granary-token.json
 # restart Homebridge
 ```
 
-## What's new in 0.5.0
+</details>
 
-- **Pet-aware service names.** Tiles now use your pet's name from the PETLIBRO
-  app: "Feed Mochi", "Mochi Food Low", etc. Falls back to the device name when
-  no pet is bound.
-- **Configurable HomeKit services.** Choose which tiles appear in the Home app
-  via the `enabledServices` config array. Disable services you don't need to
-  reduce clutter.
-- **Improved config UI.** Password field is now masked. Settings are grouped
-  into Account, Feeder Settings, HomeKit Services, and Advanced sections.
-  Service selection uses checkboxes.
-- **Friendlier default labels.** "Dispenser" is now "Feeder Jam", "Recent Feed"
-  is now "Last Fed", "Reset Desiccant" is now "Replace Desiccant".
-- **Cached name updates.** Upgrading from an older version? Service names
-  update automatically on restart. No need to remove accessories.
-- **Timer cleanup.** Outstanding timers are properly cleared when accessories
-  are removed or Homebridge shuts down.
-- **Expanded test coverage.** 25+ new tests for battery logic, desiccant
-  calculations, service opt-in, pet-aware naming, and lifecycle safety.
+---
+
+## 🆕 What's New in 0.5.0
+
+- **🐾 Pet-aware service names** — tiles use your pet's name from the PETLIBRO app ("Feed Mochi", "Mochi Food Low")
+- **🎛️ Configurable services** — choose which tiles appear via `enabledServices`
+- **🎨 Improved config UI** — masked password, grouped sections, checkbox service selection
+- **📝 Friendlier labels** — "Dispenser" is now "Feeder Jam", "Recent Feed" is "Last Fed"
+- **🔄 Cached name updates** — upgrading from older versions? Names update on restart
+- **⏱️ Timer cleanup** — proper teardown when accessories are removed or HB shuts down
+- **🧪 Expanded tests** — 25+ new test cases for battery, desiccant, naming, and lifecycle
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
 
-## Development
+---
+
+## 🛠️ Development
 
 ```bash
 npm install
@@ -236,8 +335,38 @@ npm test            # vitest
 npm run test:watch  # watch mode
 ```
 
-CI runs lint + tests + build against Node 20 / 22 / 24 on every PR.
+CI runs lint + tests + build against **Node 20 / 22 / 24** on every PR.
 
-## License
+---
 
-GPL-3.0-or-later. See `LICENSE`.
+## 🙏 Credits
+
+| | |
+|---|---|
+| API reverse-engineering | [jjjonesjr33/petlibro](https://github.com/jjjonesjr33/petlibro) by Jamie Jones Jr. and contributors |
+
+## 📄 License
+
+[GPL-3.0-or-later](LICENSE)
+
+---
+
+<div align="center">
+
+**[⬆ Back to top](#-homebridge-petlibro-granary)**
+
+</div>
+
+<!-- Badge References -->
+[npm-badge]: https://img.shields.io/npm/v/homebridge-petlibro-granary?style=flat-square&color=CB3837&logo=npm&logoColor=white
+[npm-url]: https://www.npmjs.com/package/homebridge-petlibro-granary
+[build-badge]: https://img.shields.io/github/actions/workflow/status/somekindawizard/homebridge-petlibro-granary/ci.yml?style=flat-square&logo=github
+[build-url]: https://github.com/somekindawizard/homebridge-petlibro-granary/actions
+[node-badge]: https://img.shields.io/badge/Node-20%20%7C%2022%20%7C%2024-339933?style=flat-square&logo=node.js&logoColor=white
+[node-url]: https://nodejs.org
+[hb-badge]: https://img.shields.io/badge/Homebridge-1.8%2B-purple?style=flat-square&logo=homebridge&logoColor=white
+[hb-url]: https://homebridge.io
+[license-badge]: https://img.shields.io/github/license/somekindawizard/homebridge-petlibro-granary?style=flat-square&color=blue
+[license-url]: https://www.gnu.org/licenses/gpl-3.0
+[issues-badge]: https://img.shields.io/github/issues/somekindawizard/homebridge-petlibro-granary?style=flat-square
+[issues-url]: https://github.com/somekindawizard/homebridge-petlibro-granary/issues
